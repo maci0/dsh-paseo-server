@@ -91,6 +91,8 @@ export interface PaseoBridge {
   readonly serverId: string
   /** Daemon build/version string reported in `status`. */
   readonly version: string
+  /** Provider routes the runtime can serve, for the daemon status report. */
+  listProviders(): Promise<readonly { readonly provider: string; readonly available: boolean }[]>
   /** Workspaces to advertise, in display order. */
   listWorkspaces(): Promise<readonly WorkspaceRecord[]>
   /** Agents to advertise, in display order. */

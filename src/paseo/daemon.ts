@@ -16,6 +16,7 @@ import {
   agentsResponse,
   attentionCleared,
   cancelResponse,
+  daemonStatus,
   eventsSubscriptionSet,
   envelope,
   noTerminals,
@@ -59,6 +60,8 @@ export interface DaemonOptions {
   readonly relayEndpoint?: string
   /** Shared secret a client must present in `hello`; empty accepts anyone. */
   readonly password?: string
+  /** Address the daemon listens on, for the status report; null when unknown. */
+  readonly listen?: string
   /** Supplies the current pairing offer, evaluated per request. */
   readonly pairingOffer: () => PairingOffer
 }
@@ -249,18 +252,13 @@ export class PaseoDaemon {
           return
         }
         case 'daemon.get_status.request': {
-          const [agents, workspaces] = await Promise.all([this.options.bridge.listAgents(), this.options.bridge.listWorkspaces()])
-          reply({
-            type: 'daemon.get_status.response',
-            payload: {
-              requestId,
-              status: 'running',
-              serverId: this.options.bridge.serverId,
-              version: this.options.bridge.version,
-              agentCount: agents.length,
-              workspaceCount: workspaces.length,
-            },
-          })
+          reply(daemonStatus({
+            requestId,
+            serverId: this.options.bridge.serverId,
+            version: this.options.bridge.version,
+            listen: this.options.listen ?? null,
+            providers: await this.options.bridge.listProviders(),
+          }))
           return
         }
         case 'daemon.get_pairing_offer.request': {

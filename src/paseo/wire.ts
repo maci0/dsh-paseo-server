@@ -114,9 +114,9 @@ export function serverInfo(bridge: { serverId: string; version: string }, hostna
       daemonVersion: bridge.version,
       permissions: ['daemon.read', 'workspace.read', 'workspace.write', 'workspace.manage'],
       capabilities: { voice: false, pushNotifications: false },
-      // Every gate stays off: a client that believes the daemon supports a
-      // feature asks for messages this server does not answer.
-      features: {},
+      // Every gate stays off except the status RPC: a client that believes the
+      // daemon supports a feature asks for messages this server does not answer.
+      features: { daemonStatusRpc: true },
     },
   }
 }
@@ -460,10 +460,26 @@ export function workspaceUpdate(workspace: WorkspaceRecord): Record<string, unkn
 }
 
 /** `daemon.get_status.response`. */
-export function daemonStatus(requestId: string, workspaceCount: number, agentCount: number): Record<string, unknown> {
+export function daemonStatus(input: {
+  readonly requestId: string
+  readonly serverId: string
+  readonly version: string
+  readonly listen: string | null
+  readonly providers: readonly { readonly provider: string; readonly available: boolean }[]
+}): Record<string, unknown> {
   return {
     type: 'daemon.get_status.response',
-    payload: { requestId, ok: true, workspaceCount, agentCount },
+    payload: {
+      requestId: input.requestId,
+      serverId: input.serverId,
+      version: input.version,
+      pid: process.pid,
+      nodePath: process.execPath,
+      startedAt: new Date(Date.now() - process.uptime() * 1_000).toISOString(),
+      listen: input.listen,
+      relay: null,
+      providers: input.providers.map((entry) => ({ provider: entry.provider, available: entry.available, error: null })),
+    },
   }
 }
 
