@@ -22,7 +22,11 @@ test('a human prompt becomes a user_message row', () => {
     source: { kind: 'user' },
     content: [{ type: 'text', text: 'hello there' }],
   }))
-  assert.deepEqual(rows, [{ item: { type: 'user_message', text: 'hello there' }, timestamp: new Date(1_760_000_000_003).toISOString(), seq: 3 }])
+  assert.deepEqual(rows, [{
+    item: { type: 'user_message', text: 'hello there', messageId: 'm1' },
+    timestamp: new Date(1_760_000_000_003).toISOString(),
+    seq: 3,
+  }])
 })
 
 test('injected context is not shown as a human prompt', () => {
@@ -107,4 +111,28 @@ test('workspace status is the most severe status among its agents', () => {
   assert.equal(workspaceStatus(['idle', 'running']), 'running')
   assert.equal(workspaceStatus(['running', 'error']), 'running')
   assert.equal(workspaceStatus(['idle', 'error']), 'failed')
+})
+
+test('a user message carries the identity the client minted for it', () => {
+  const rows = foldEvent(event('user/message', 11, {
+    id: 'msg_1',
+    role: 'user',
+    source: { kind: 'user' },
+    content: [{ type: 'text', text: 'hello' }],
+  }), 'client_msg_9')
+  const item = rows[0]?.item
+  assert.equal(item?.type, 'user_message')
+  assert.equal(item?.type === 'user_message' ? item.messageId : null, 'msg_1')
+  assert.equal(item?.type === 'user_message' ? item.clientMessageId : null, 'client_msg_9')
+})
+
+test('an assistant message carries its runtime identity', () => {
+  const rows = foldEvent(event('assistant/message', 12, {
+    turn: 1,
+    step: 0,
+    message: { id: 'msg_2', role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text: 'hi' }] },
+    stream: [],
+  }))
+  const item = rows[0]?.item
+  assert.equal(item?.type === 'assistant_message' ? item.messageId : null, 'msg_2')
 })

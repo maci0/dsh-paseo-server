@@ -65,6 +65,8 @@ class DshBridge implements PaseoBridge {
   private readonly workspaceCache = new Map<string, WorkspaceRecord>()
   private readonly titles = new Map<string, string | null>()
   private readonly failed = new Set<string>()
+  /** Client-minted prompt identities awaiting their user/message event, oldest first. */
+  private readonly pendingClientMessageIds: Array<{ agentId: string; clientMessageId: string }> = []
   private started = false
 
   constructor(options: DshBridgeOptions) {
@@ -155,8 +157,9 @@ class DshBridge implements PaseoBridge {
     return limit === undefined || entries.length <= limit ? entries : entries.slice(entries.length - limit)
   }
 
-  async sendPrompt(agentId: string, text: string): Promise<void> {
+  async sendPrompt(agentId: string, text: string, clientMessageId?: string): Promise<void> {
     const controller = this.requireController()
+    if (clientMessageId !== undefined) this.pendingClientMessageIds.push({ agentId, clientMessageId })
     await controller.prompt({
       requestId: randomUUID(),
       sessionId: agentId,
@@ -164,6 +167,20 @@ class DshBridge implements PaseoBridge {
       content: [{ type: 'text', text }],
     }, new AbortController().signal)
     this.titles.set(agentId, titleFrom(text) ?? this.titles.get(agentId) ?? null)
+  }
+
+  /**
+   * Take the client-minted identity of the submission whose message event is
+   * being folded, oldest first.
+   *
+   * A client renders its own prompt immediately, so echoing the row back
+   * without the identity it minted makes it appear twice. The queue is FIFO
+   * because a session admits prompts in arrival order.
+   */
+  private claimClientMessageId(agentId: string): string | undefined {
+    const index = this.pendingClientMessageIds.findIndex((entry) => entry.agentId === agentId)
+    if (index < 0) return undefined
+    return this.pendingClientMessageIds.splice(index, 1)[0]?.clientMessageId
   }
 
   async createAgent(input: {
@@ -263,7 +280,8 @@ class DshBridge implements PaseoBridge {
       else if (reason !== undefined) this.failed.delete(session.id)
       void this.publishAgent(session.id)
     }
-    for (const entry of foldEvent(event)) {
+    const clientMessageId = event.type === 'user/message' ? this.claimClientMessageId(session.id) : undefined
+    for (const entry of foldEvent(event, clientMessageId)) {
       this.emit({ kind: 'timeline', agentId: session.id, entry })
     }
   }
@@ -424,24 +442,43 @@ export function foldEvents(events: readonly SessionEventLike[]): TimelineEntry[]
  * no duplicate running and completed rows. A live running indicator needs the
  * Paseo timeline-replacement surface, which this daemon does not advertise.
  * @param event - committed session event.
+ * @param clientMessageId - identity the client minted for this submission, when it made it.
  * @returns the rows this event contributes.
  */
-export function foldEvent(event: SessionEventLike): TimelineEntry[] {
+export function foldEvent(event: SessionEventLike, clientMessageId?: string): TimelineEntry[] {
   const timestamp = new Date(event.time).toISOString()
   switch (event.type) {
     case 'user/message': {
       if (messageSourceKind(event.data) !== 'user') return []
       const text = messageText(event.data)
-      return text === undefined || text.length === 0 ? [] : [{ item: { type: 'user_message', text }, timestamp, seq: event.seq }]
+      if (text === undefined || text.length === 0) return []
+      const messageId = stringField(event.data, 'id')
+      return [{
+        item: {
+          type: 'user_message',
+          text,
+          ...(messageId === undefined ? {} : { messageId }),
+          ...(clientMessageId === undefined ? {} : { clientMessageId }),
+        },
+        timestamp,
+        seq: event.seq,
+      }]
     }
     case 'assistant/message': {
       const message = recordField(event.data, 'message')
       if (message === undefined) return []
       const text = messageText(message)
+      const messageId = stringField(message, 'id')
       const rows: TimelineEntry[] = []
       const reasoning = messageReasoning(message)
       if (reasoning !== undefined && reasoning.length > 0) rows.push({ item: { type: 'reasoning', text: reasoning }, timestamp, seq: event.seq })
-      if (text !== undefined && text.length > 0) rows.push({ item: { type: 'assistant_message', text }, timestamp, seq: event.seq })
+      if (text !== undefined && text.length > 0) {
+        rows.push({
+          item: { type: 'assistant_message', text, ...(messageId === undefined ? {} : { messageId }) },
+          timestamp,
+          seq: event.seq,
+        })
+      }
       return rows
     }
     case 'tool/call':

@@ -252,9 +252,18 @@ export function agentSnapshot(agent: AgentRecord): Record<string, unknown> {
 export function timelineItem(item: TimelineItem): Record<string, unknown> {
   switch (item.type) {
     case 'user_message':
-      return { type: 'user_message', text: item.text }
+      return {
+        type: 'user_message',
+        text: item.text,
+        ...(item.messageId === undefined ? {} : { messageId: item.messageId }),
+        ...(item.clientMessageId === undefined ? {} : { clientMessageId: item.clientMessageId }),
+      }
     case 'assistant_message':
-      return { type: 'assistant_message', text: item.text }
+      return {
+        type: 'assistant_message',
+        text: item.text,
+        ...(item.messageId === undefined ? {} : { messageId: item.messageId }),
+      }
     case 'reasoning':
       return { type: 'reasoning', text: item.text }
     case 'tool_call':

@@ -225,7 +225,7 @@ export class PaseoDaemon {
             reply(sendMessageRejected(requestId, agentId, 'agent not found'))
             return
           }
-          await this.options.bridge.sendPrompt(agent.id, text)
+          await this.options.bridge.sendPrompt(agent.id, text, stringField(message, 'messageId'))
           const updated = (await this.options.bridge.getAgent(agent.id)) ?? agent
           reply(sendMessageResponse(requestId, updated))
           return

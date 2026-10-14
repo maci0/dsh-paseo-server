@@ -62,8 +62,15 @@ export interface AgentRecord {
 
 /** One rendered timeline row. */
 export type TimelineItem =
-  | { readonly type: 'user_message'; readonly text: string }
-  | { readonly type: 'assistant_message'; readonly text: string }
+  | {
+    readonly type: 'user_message'
+    readonly text: string
+    /** Runtime identity of the message, carried so a client can reconcile rows. */
+    readonly messageId?: string
+    /** Client-minted identity of the submission, echoed back from the send. */
+    readonly clientMessageId?: string
+  }
+  | { readonly type: 'assistant_message'; readonly text: string; readonly messageId?: string }
   | { readonly type: 'reasoning'; readonly text: string }
   | { readonly type: 'tool_call'; readonly callId: string; readonly name: string; readonly status: string; readonly input: unknown; readonly output?: unknown; readonly error?: string }
   | { readonly type: 'error'; readonly message: string }
@@ -104,7 +111,7 @@ export interface PaseoBridge {
   /** Timeline rows for one agent, oldest first. */
   getTimeline(agentId: string, options?: { readonly limit?: number }): Promise<readonly TimelineEntry[]>
   /** Deliver a user prompt to one agent, starting a turn when idle. */
-  sendPrompt(agentId: string, text: string): Promise<void>
+  sendPrompt(agentId: string, text: string, clientMessageId?: string): Promise<void>
   /** Create an agent in a workspace and return it. */
   createAgent(input: {
     /** Existing workspace to place the agent in; resolved to its directory. */
