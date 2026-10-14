@@ -126,6 +126,7 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'set_agent_feature_request',
   'agent.provider_subagents.timeline.get.request',
   'workspace.setup.run.request',
+  'resume_agent_request',
   'workspace_setup_status_request',
   'restart_server_request',
   'shutdown_server_request',

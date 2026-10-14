@@ -666,6 +666,25 @@ class DshBridge implements PaseoBridge {
     return { workspace: await this.createWorkspace({ directory: target, name: repo.split('/').pop() ?? target }) }
   }
 
+  /**
+   * Attach a persisted session, which is what resuming it means here.
+   *
+   * The controller adopts a session by id, so a client resuming a handle it
+   * kept reaches the same transcript rather than a new session.
+   */
+  async resumeAgent(sessionId: string): Promise<AgentRecord | null> {
+    const controller = this.requireController()
+    const summary = (await this.summaries()).find((item) => item.sessionId === sessionId)
+    if (summary === undefined) return null
+    if (!summary.agentAvailable) {
+      await controller.create({
+        sessionId,
+        ...(summary.cwd === undefined ? {} : { cwd: summary.cwd }),
+      })
+    }
+    return this.getAgent(sessionId)
+  }
+
   /** Install a reasoning effort on the agent's current model. */
   async selectAgentThinking(agentId: string, thinkingOptionId: string | null): Promise<void> {
     const controller = this.requireController()

@@ -74,6 +74,7 @@ function fakeBridge() {
     async renameAgent() {},
     async listCommands() { return [] },
     async selectAgentThinking() {},
+    async resumeAgent() { return null },
     async runWorkspaceSetup() { return true },
     async workspaceSetupStatus() { return null },
     async createDirectory() { return { path: '/new' } },
@@ -1020,4 +1021,60 @@ test('diagnostics reports what the daemon is doing', async () => {
   assert.equal(payload.connectedClients, 1)
   assert.equal(payload.protocolVersion, 1)
   assert.ok(typeof payload.uptimeSeconds === 'number')
+})
+
+test('resume_agent_request attaches the session its handle names', async () => {
+  const { bridge } = fakeBridge()
+  let resumed: string | null = null
+  const resuming: PaseoBridge = {
+    ...bridge,
+    resumeAgent: async (sessionId) => {
+      resumed = sessionId
+      return {
+        id: sessionId,
+        shortId: sessionId,
+        title: 'resumed',
+        provider: 'stub',
+        model: 'stub-model',
+        status: 'idle',
+        cwd: '/repo',
+        workspaceId: 'ws_1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        lastUserMessageAt: null,
+      }
+    },
+  }
+  const client = connect(makeDaemon(resuming))
+  client.hello()
+  client.request({
+    type: 'resume_agent_request',
+    requestId: 'r1',
+    handle: { provider: 'stub', sessionId: 'ses_1' },
+  })
+  await client.settle()
+  assert.equal(resumed, 'ses_1')
+  assert.equal(client.last().type, 'fetch_agent_response')
+  assert.equal((client.last().payload as Record<string, unknown>).error, null)
+})
+
+test('a resume handle for an unknown session reports it', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'resume_agent_request', requestId: 'r1', handle: { provider: 'stub', sessionId: 'ses_missing' } })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'fetch_agent_response')
+  assert.match(String(payload.error), /no such session/)
+})
+
+test('a server-to-client message echoed by a client draws no answer', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  const before = client.sent.length
+  client.request({ type: 'assistant_message', agentId: 'ses_1' })
+  await client.settle()
+  assert.equal(client.sent.length, before)
 })

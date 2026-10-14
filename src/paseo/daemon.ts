@@ -1139,6 +1139,18 @@ export class PaseoDaemon {
           reply(providersSnapshotRefreshed(requestId, true))
           return
         }
+        case 'resume_agent_request': {
+          const handle = recordValue(message.handle)
+          const sessionId = handle === undefined ? undefined : stringField(handle, 'sessionId')
+          if (sessionId === undefined) {
+            reply(agentResponse(requestId, null, null, 'a resume handle needs a session id'))
+            return
+          }
+          const resumed = await this.options.bridge.resumeAgent(sessionId)
+          const workspace = resumed === null ? null : await this.workspaceFor(resumed.workspaceId) ?? null
+          reply(agentResponse(requestId, resumed, workspace, resumed === null ? 'no such session' : null))
+          return
+        }
         case 'agent.provider_subagents.timeline.get.request': {
           const parentAgentId = stringField(message, 'parentAgentId')
           const subagentId = stringField(message, 'subagentId')
@@ -1699,6 +1711,14 @@ export class PaseoDaemon {
         case 'client_heartbeat':
         case 'subscribe_terminals_request':
         case 'unsubscribe_terminals_request':
+        // Server-to-client messages: a client that echoes one gets no answer
+        // rather than an error about a request it never needed to send.
+        case 'assistant_message':
+        case 'user_message':
+        case 'permission_requested':
+        case 'agent_permission_request':
+        case 'pull_request_timeline_response':
+        case 'forge_change_request':
           return
         default: {
           const refused = REFUSED_REQUESTS[type]

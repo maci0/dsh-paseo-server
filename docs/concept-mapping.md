@@ -21,7 +21,7 @@ not mapped and is reported as an empty collection rather than invented.
 | Project | git repository root of a workspace directory | `projectId` is a stable digest of the canonical repository root. Two workspaces in one repository share one project, which is what Paseo expects for a checkout and its worktrees. A directory that is not in a git work tree becomes its own project. |
 | Workspace | one `ctx.workspaceRegistry` record | `workspaceDirectory` is the canonical directory path. `name` and `title` are the DSH workspace title. `workspaceKind` is `directory`, and `isPaseoOwnedWorktree` is false because DSH does not hand out worktrees. |
 | Agent | one root DSH Session, live or persisted | `id` is the DSH session id, so a Paseo client controls exactly the conversation DSH owns. A Session nothing is attached to is still an agent: prompting it resumes it, and its transcript comes from the durable history page. Subagent sessions (a `parentSession` header) are not listed; see Deferred. |
-| Provider | DSH LLM provider id | For a live Session, the provider its request header names. For a persisted one, the configured default, because nothing has been read that would name another. |
+| Provider | DSH LLM provider id | For a live Session, the provider its request header names. For a persisted one, the durable model-selection projection, so a resumed Session reports the model it last ran. |
 | Model | DSH model id | Same source as the provider. |
 | Agent status | Agent runtime state, folded with turn activity | See the status table below. |
 | Timeline entry | one DSH session event | See the timeline table below. |

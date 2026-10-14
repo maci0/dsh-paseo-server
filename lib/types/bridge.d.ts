@@ -398,6 +398,8 @@ export interface PaseoBridge {
     }>;
     /** Rename one agent. */
     renameAgent(agentId: string, title: string): Promise<void>;
+    /** Attach a persisted session so it counts as live, returning its record. */
+    resumeAgent(sessionId: string): Promise<AgentRecord | null>;
     /** Install a reasoning effort on one agent's current model. */
     selectAgentThinking(agentId: string, thinkingOptionId: string | null): Promise<void>;
     /** Run a workspace's declared setup command as a background job. */
