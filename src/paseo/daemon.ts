@@ -9,9 +9,13 @@ import type { AgentRecord, BridgeEvent, PaseoBridge, WorkspaceRecord } from '../
 import type { WireSocket } from './transport.ts'
 import {
   agentRemoved,
+  agentCreateFailedStatus,
+  agentCreateResponse,
+  agentCreatedStatus,
   agentResponse,
   agentStatus,
   agentStream,
+  availableProvidersResponse,
   agentUpdate,
   agentsResponse,
   attentionCleared,
@@ -22,6 +26,9 @@ import {
   noTerminals,
   parseInbound,
   pong,
+  providerModelsResponse,
+  providerModesResponse,
+  providersSnapshotResponse,
   projectsResponse,
   rpcError,
   sendMessageRejected,
@@ -31,6 +38,7 @@ import {
   timelineResponse,
   waitForFinishResponse,
   workspaceUpdate,
+  workspaceCreateResponse,
   workspacesResponse,
   isSettledStatus,
 } from './wire.ts'
@@ -232,6 +240,95 @@ export class PaseoDaemon {
           reply(cancelResponse(requestId, agentId, await this.options.bridge.getAgent(agentId)))
           return
         }
+        case 'workspace.create.request': {
+          const source = recordValue(message.source)
+          if (source === undefined || source.kind !== 'directory' || typeof source.path !== 'string') {
+            reply(workspaceCreateResponse(requestId, null, null, 'only a directory workspace source is supported'))
+            return
+          }
+          const workspace = await this.options.bridge.createWorkspace({
+            directory: source.path,
+            ...(typeof message.title === 'string' ? { name: message.title } : {}),
+          })
+          this.workspaceCache.set(workspace.id, workspace)
+          reply(workspaceCreateResponse(requestId, workspace, null, null))
+          return
+        }
+        case 'agent.create.request':
+        case 'create_agent_request': {
+          const legacy = type === 'create_agent_request'
+          const config = recordValue(message.config)
+          const provider = config === undefined ? undefined : stringField(config, 'provider')
+          const model = config === undefined ? undefined : stringField(config, 'model')
+          const workspaceId = stringField(message, 'workspaceId')
+          const directory = config === undefined ? undefined : stringField(config, 'cwd')
+          if (workspaceId === undefined && directory === undefined) {
+            const failure = 'agent creation needs workspaceId or config.cwd'
+            reply(legacy ? agentCreateFailedStatus(requestId, failure) : agentCreateResponse(requestId, null, failure))
+            return
+          }
+          try {
+            const agent = await this.options.bridge.createAgent({
+              ...(workspaceId === undefined ? {} : { workspaceId }),
+              ...(directory === undefined ? {} : { directory }),
+              ...(provider === undefined ? {} : { provider }),
+              ...(model === undefined ? {} : { model }),
+              ...(config === undefined || typeof config.title !== 'string' ? {} : { title: config.title }),
+              ...(typeof message.initialPrompt === 'string' ? { prompt: message.initialPrompt } : {}),
+            })
+            reply(legacy ? agentCreatedStatus(requestId, agent) : agentCreateResponse(requestId, agent, null))
+          } catch (error) {
+            this.options.logger.warn(`paseo: agent creation failed: ${error instanceof Error ? error.message : String(error)}`)
+            const failure = error instanceof Error ? error.message : String(error)
+            if (!legacy) throw error
+            reply(agentCreateFailedStatus(requestId, failure))
+          }
+          return
+        }
+        case 'get_providers_snapshot_request': {
+          const providers = await this.options.bridge.listProviders()
+          const entries = await Promise.all(providers.map(async (entry) => ({
+            provider: entry.provider,
+            available: entry.available,
+            models: await this.options.bridge.listProviderModels(entry.provider),
+          })))
+          reply(providersSnapshotResponse(requestId, entries))
+          return
+        }
+        case 'list_available_providers_request': {
+          reply(availableProvidersResponse(requestId, await this.options.bridge.listProviders()))
+          return
+        }
+        case 'list_provider_models_request': {
+          const provider = stringField(message, 'provider')
+          if (provider === undefined) {
+            reply(rpcError(requestId, type, 'provider is required', 'invalid_request'))
+            return
+          }
+          reply(providerModelsResponse(requestId, provider, await this.options.bridge.listProviderModels(provider)))
+          return
+        }
+        case 'list_provider_modes_request': {
+          const provider = stringField(message, 'provider')
+          if (provider === undefined) {
+            reply(rpcError(requestId, type, 'provider is required', 'invalid_request'))
+            return
+          }
+          reply(providerModesResponse(requestId, provider))
+          return
+        }
+        case 'list_provider_features_request': {
+          const provider = stringField(message, 'provider')
+          if (provider === undefined) {
+            reply(rpcError(requestId, type, 'provider is required', 'invalid_request'))
+            return
+          }
+          reply({
+            type: 'list_provider_features_response',
+            payload: { provider, features: [], fetchedAt: new Date().toISOString(), requestId },
+          })
+          return
+        }
         case 'wait_for_finish_request': {
           const agentId = stringField(message, 'agentId')
           if (agentId === undefined) {
@@ -425,4 +522,8 @@ export interface PaseoConnection {
 /** Narrow a value to an agent record, for embedders. */
 export function isAgentRecord(value: unknown): value is AgentRecord {
   return value !== null && typeof value === 'object' && typeof (value as AgentRecord).id === 'string'
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
 }

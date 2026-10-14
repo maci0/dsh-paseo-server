@@ -43,6 +43,10 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'send_agent_message',
   'cancel_agent_request',
   'daemon.get_status.request',
+  'agent.create.request',
+  'create_agent_request',
+  'workspace.create.request',
+  'wait_for_finish_request',
   'daemon.get_pairing_offer.request',
   'client_heartbeat',
   'subscription.release.request',
@@ -416,6 +420,121 @@ export function waitForFinishResponse(
 /** Statuses an agent settles into, which end a `wait_for_finish_request`. */
 export function isSettledStatus(status: AgentRecord['status']): boolean {
   return status === 'idle' || status === 'error' || status === 'closed'
+}
+
+/** Legacy creation success: a `status` frame, not a correlated response. */
+export function agentCreatedStatus(requestId: string, agent: AgentRecord): Record<string, unknown> {
+  return { type: 'status', payload: { status: 'agent_created', requestId, agentId: agent.id, agent: agentSnapshot(agent) } }
+}
+
+/** Legacy creation failure: a `status` frame, not a correlated response. */
+export function agentCreateFailedStatus(requestId: string, error: string): Record<string, unknown> {
+  return { type: 'status', payload: { status: 'agent_create_failed', requestId, error } }
+}
+
+/** `agent.create.response`. */
+export function agentCreateResponse(requestId: string, agent: AgentRecord | null, error: string | null): Record<string, unknown> {
+  return { type: 'agent.create.response', payload: { requestId, agent: agent === null ? null : agentSnapshot(agent), error } }
+}
+
+/** `workspace.create.response`. */
+export function workspaceCreateResponse(
+  requestId: string,
+  workspace: WorkspaceRecord | null,
+  agent: AgentRecord | null,
+  error: string | null,
+): Record<string, unknown> {
+  return {
+    type: 'workspace.create.response',
+    payload: {
+      requestId,
+      workspace: workspace === null ? null : workspaceDescriptor(workspace),
+      agent: agent === null ? undefined : agentSnapshot(agent),
+      setupTerminalId: null,
+      error,
+    },
+  }
+}
+
+/** One provider entry of the providers snapshot. */
+export interface ProviderSnapshotInput {
+  readonly provider: string
+  readonly available: boolean
+  readonly models: readonly { readonly id: string; readonly label: string; readonly description?: string }[]
+}
+
+/** `get_providers_snapshot_response`. */
+export function providersSnapshotResponse(requestId: string, entries: readonly ProviderSnapshotInput[]): Record<string, unknown> {
+  return {
+    type: 'get_providers_snapshot_response',
+    payload: {
+      entries: entries.map((entry) => ({
+        provider: entry.provider,
+        status: entry.available ? 'ready' : 'unavailable',
+        enabled: true,
+        models: entry.models.map((model) => ({
+          provider: entry.provider,
+          id: model.id,
+          label: model.label,
+          isSelectable: true,
+          ...(model.description === undefined ? {} : { description: model.description }),
+        })),
+        modes: [{ id: 'default', label: 'Default' }],
+        defaultModeId: 'default',
+        ...(entry.available ? {} : { error: 'no credential is configured for this provider' }),
+      })),
+      generatedAt: new Date().toISOString(),
+      requestId,
+    },
+  }
+}
+
+/** `list_provider_models_response`. */
+export function providerModelsResponse(
+  requestId: string,
+  provider: string,
+  models: readonly { readonly id: string; readonly label: string; readonly description?: string }[],
+): Record<string, unknown> {
+  return {
+    type: 'list_provider_models_response',
+    payload: {
+      provider,
+      models: models.map((model) => ({
+        provider,
+        id: model.id,
+        label: model.label,
+        isSelectable: true,
+        ...(model.description === undefined ? {} : { description: model.description }),
+      })),
+      error: null,
+      fetchedAt: new Date().toISOString(),
+      requestId,
+    },
+  }
+}
+
+/** `list_available_providers_response`. */
+export function availableProvidersResponse(
+  requestId: string,
+  providers: readonly { readonly provider: string; readonly available: boolean }[],
+): Record<string, unknown> {
+  return {
+    type: 'list_available_providers_response',
+    payload: {
+      providers: providers.map((entry) => ({ provider: entry.provider, available: entry.available, error: null })),
+      error: null,
+      fetchedAt: new Date().toISOString(),
+      requestId,
+    },
+  }
+}
+
+/** `list_provider_modes_response`; DSH has no provider-owned modes. */
+export function providerModesResponse(requestId: string, provider: string): Record<string, unknown> {
+  return {
+    type: 'list_provider_modes_response',
+    payload: { provider, modes: [{ id: 'default', label: 'Default' }], error: null, fetchedAt: new Date().toISOString(), requestId },
+  }
 }
 
 /** `agent_update` upsert. */

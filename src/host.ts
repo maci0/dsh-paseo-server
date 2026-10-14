@@ -97,8 +97,17 @@ export interface SessionControllerLike {
     readonly sessionId: string
     readonly mode: 'queue' | 'steer'
     readonly content: readonly PromptPart[]
-  }): Promise<{ readonly accepted: boolean }>
+  }, signal: AbortSignal): Promise<{ readonly accepted: boolean }>
   cancel(request: { readonly sessionId: string }): Promise<{ readonly accepted: boolean }>
+  /** Install a model selection on a session, when the composition supports it. */
+  selectModel?(request: {
+    readonly sessionId: string
+    readonly provider: string
+    readonly model: string
+    readonly reasoningEffort?: string
+  }): Promise<{ readonly selected: { readonly provider: string; readonly model: string } }>
+  /** Rename a session, when the composition supports it. */
+  rename?(request: { readonly sessionId: string; readonly title: string }): Promise<{ readonly title: string }>
 }
 
 /** One HTTP route registration. */

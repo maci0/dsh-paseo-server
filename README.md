@@ -72,12 +72,44 @@ is a timeline row.
 
 ## Status
 
-Works: pairing, relay transport with end-to-end encryption, workspace and agent
-listing, timeline reads, prompt send, interrupt, wait-for-finish, the pairing
-card with its QR.
+Works, verified against the shipped Paseo CLI and the Paseo client: pairing, the
+relay transport with end-to-end encryption, workspace and agent listing, agent
+creation (both `agent.create.request` and the legacy `create_agent_request`),
+timeline reads, prompt send, interrupt, wait-for-finish, provider and model
+catalogs, and the pairing card with its QR.
 
-Partial: agent creation from the phone. Not mapped: terminals, workspace
-scripts, git and forge panels, schedules.
+A full turn was driven end to end: `paseo run --provider <p>/<m>` created a DSH
+session, the harness ran the model call, and the client read the reply back from
+the timeline, both over a direct socket and through `relay.paseo.sh`.
+
+Not mapped: terminals, workspace scripts, git and forge panels, schedules.
+
+## Testing on the emulator
+
+The plugin needs no Android build: it is reachable from an emulator at
+`10.0.2.2:<port>`, which the emulator maps to the host loopback interface.
+
+```bash
+emulator -avd <avd> &
+adb shell am start -a android.intent.action.VIEW -d "$(curl -s localhost:3080/paseo/pairing | jq -r .url)"
+```
+
+That opens the Paseo client with the pairing offer and shows the confirm
+dialog with this daemon's server id, key fingerprint, and relay. What was
+verified here:
+
+- `GET /api/status` over HTTP from inside the emulator, through `10.0.2.2`.
+- The pairing offer opened in the emulator's client, showing
+  `srv_...`, the public-key fingerprint, and `relay.paseo.sh:443`, then
+  connecting and listing this daemon's DSH workspaces and agents.
+
+The Android app itself (`sh.paseo`, version 0.11.2) installs into the emulator,
+but the build is ARM64-only and carries Google Play's PairIP integrity check.
+On an x86_64 emulator its native libraries must be present in the app's
+`lib/arm64` directory, and once it launches the license check refuses a
+copy that was not installed through Play. Install it from Play on a real
+device or on a Play-enabled emulator image instead. The web client at
+`app.paseo.sh` is the same client and pairs identically.
 
 ## Development
 

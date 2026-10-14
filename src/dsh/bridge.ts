@@ -92,6 +92,22 @@ class DshBridge implements PaseoBridge {
     return providers.map((entry) => ({ provider: entry.id, available: true }))
   }
 
+  async listProviderModels(provider: string): Promise<readonly { readonly id: string; readonly label: string; readonly description?: string }[]> {
+    const llm = this.ctx.get('llm') as { listModels?(provider: string): Promise<readonly { readonly id: string; readonly name?: string; readonly description?: string }[]> } | undefined
+    if (llm?.listModels === undefined) return []
+    try {
+      const models = await llm.listModels(provider)
+      return models.map((model) => ({
+        id: model.id,
+        label: model.name ?? model.id,
+        ...(model.description === undefined ? {} : { description: model.description }),
+      }))
+    } catch (error) {
+      this.ctx.logger.warn(`paseo: model catalog for ${provider} failed: ${String(error)}`)
+      return []
+    }
+  }
+
   async listWorkspaces(): Promise<readonly WorkspaceRecord[]> {
     const registry = this.ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
     const records = new Map<string, WorkspaceRecord>()
@@ -146,19 +162,43 @@ class DshBridge implements PaseoBridge {
       sessionId: agentId,
       mode: 'queue',
       content: [{ type: 'text', text }],
-    })
+    }, new AbortController().signal)
     this.titles.set(agentId, titleFrom(text) ?? this.titles.get(agentId) ?? null)
   }
 
-  async createAgent(input: { readonly workspaceId: string; readonly prompt?: string; readonly title?: string }): Promise<AgentRecord> {
+  async createAgent(input: {
+    readonly workspaceId?: string
+    readonly directory?: string
+    readonly provider?: string
+    readonly model?: string
+    readonly title?: string
+    readonly prompt?: string
+  }): Promise<AgentRecord> {
     const controller = this.requireController()
-    const workspace = this.workspaceCache.get(input.workspaceId)
-    const created = await controller.create(workspace === undefined ? {} : { cwd: workspace.directory })
-    if (input.prompt !== undefined && input.prompt.length > 0) await this.sendPrompt(created.sessionId, input.prompt)
+    const directory = await this.directoryFor(input)
+    const created = await controller.create({ cwd: directory })
+    if (input.provider !== undefined && input.model !== undefined && controller.selectModel !== undefined) {
+      await controller.selectModel({ sessionId: created.sessionId, provider: input.provider, model: input.model })
+    }
+    if (input.title !== undefined && controller.rename !== undefined) {
+      await controller.rename({ sessionId: created.sessionId, title: input.title })
+    }
     if (input.title !== undefined) this.titles.set(created.sessionId, input.title)
+    if (input.prompt !== undefined && input.prompt.length > 0) await this.sendPrompt(created.sessionId, input.prompt)
     const agent = await this.getAgent(created.sessionId)
     if (agent === null) throw new Error(`created session ${created.sessionId} has no live agent`)
     return agent
+  }
+
+  /** Resolve the directory a new agent runs in. */
+  private async directoryFor(input: { readonly workspaceId?: string; readonly directory?: string }): Promise<string> {
+    if (input.workspaceId !== undefined) {
+      const workspace = await this.workspaceFor(input.workspaceId)
+      if (workspace === undefined) throw new Error(`unknown workspace ${input.workspaceId}`)
+      return workspace.directory
+    }
+    if (input.directory !== undefined && input.directory.length > 0) return input.directory
+    throw new Error('agent creation needs a workspace or a directory')
   }
 
   async cancelAgent(agentId: string): Promise<void> {

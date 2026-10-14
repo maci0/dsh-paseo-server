@@ -93,6 +93,8 @@ export interface PaseoBridge {
   readonly version: string
   /** Provider routes the runtime can serve, for the daemon status report. */
   listProviders(): Promise<readonly { readonly provider: string; readonly available: boolean }[]>
+  /** Models one provider route can serve, for the client's model picker. */
+  listProviderModels(provider: string): Promise<readonly { readonly id: string; readonly label: string; readonly description?: string }[]>
   /** Workspaces to advertise, in display order. */
   listWorkspaces(): Promise<readonly WorkspaceRecord[]>
   /** Agents to advertise, in display order. */
@@ -104,7 +106,20 @@ export interface PaseoBridge {
   /** Deliver a user prompt to one agent, starting a turn when idle. */
   sendPrompt(agentId: string, text: string): Promise<void>
   /** Create an agent in a workspace and return it. */
-  createAgent(input: { readonly workspaceId: string; readonly prompt?: string; readonly title?: string }): Promise<AgentRecord>
+  createAgent(input: {
+    /** Existing workspace to place the agent in; resolved to its directory. */
+    readonly workspaceId?: string
+    /** Directory to place the agent in when no workspace is named. */
+    readonly directory?: string
+    /** Provider route for the session's model selection. */
+    readonly provider?: string
+    /** Model id for the session's model selection. */
+    readonly model?: string
+    /** Explicit title; the runtime's own title is kept when absent. */
+    readonly title?: string
+    /** Initial prompt, delivered as the agent's first turn. */
+    readonly prompt?: string
+  }): Promise<AgentRecord>
   /** Interrupt one agent's active turn, if any. */
   cancelAgent(agentId: string): Promise<void>
   /** Create a workspace over a directory. */
