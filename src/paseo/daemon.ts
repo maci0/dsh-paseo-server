@@ -156,6 +156,9 @@ const DEFAULT_WAIT_TIMEOUT_MS = 600_000
 /** How often a subscribed diff is re-read, in milliseconds. */
 const DIFF_POLL_INTERVAL_MS = 4_000
 
+/** Requests kept for the diagnostics report. */
+const REQUEST_LOG_LIMIT = 300
+
 /** How often a watched file is re-read, in milliseconds. */
 const FILE_POLL_INTERVAL_MS = 2_000
 
@@ -356,10 +359,17 @@ export class PaseoDaemon {
     void this.dispatch(connection, frame.message)
   }
 
-  /** Answer one request message. */
+  /**
+   * Answer one request message.
+   *
+   * Every request is counted by type, and one this daemon does not answer is
+   * recorded with its type, so a client that asks for something unsupported is
+   * visible instead of silently empty.
+   */
   private async dispatch(connection: Connection, message: Record<string, unknown>): Promise<void> {
     const type = typeof message.type === 'string' ? message.type : ''
     const requestId = typeof message.requestId === 'string' ? message.requestId : ''
+    this.countRequest(type)
     const reply = (payload: Record<string, unknown>): void => {
       if (connection.closed) return
       connection.socket.send(envelope(payload))
@@ -1855,9 +1865,12 @@ export class PaseoDaemon {
         default: {
           const refused = REFUSED_REQUESTS[type]
           if (refused !== undefined) {
+            this.unanswered.set(type, (this.unanswered.get(type) ?? 0) + 1)
             reply(refusalResponse(refused.response, requestId, refused.reason))
             return
           }
+          this.unsupported.set(type, (this.unsupported.get(type) ?? 0) + 1)
+          this.options.logger.warn(`paseo: unsupported request: ${type}`)
           reply(rpcError(requestId, type, `unsupported request: ${type}`, 'unsupported'))
         }
       }
@@ -1871,6 +1884,35 @@ export class PaseoDaemon {
 
   /** Last known descriptor of every terminal, for change notifications. */
   private readonly terminalCache = new Map<string, TerminalRecord>()
+
+  /** Count one request by type, keeping the newest few hundred for inspection. */
+  private countRequest(type: string): void {
+    if (type.length === 0) return
+    this.requestCounts.set(type, (this.requestCounts.get(type) ?? 0) + 1)
+    this.recentRequests.push({ type, at: new Date().toISOString() })
+    if (this.recentRequests.length > REQUEST_LOG_LIMIT) this.recentRequests.shift()
+  }
+
+  /**
+   * What clients have asked this daemon.
+   *
+   * An empty conversation list on a client is either a client that never
+   * asked or a request this daemon could not answer, and this is what tells
+   * the two apart.
+   * @returns counts by request type, the unsupported ones, and the newest requests.
+   */
+  requestReport(): Record<string, unknown> {
+    return {
+      serverId: this.options.bridge.serverId,
+      version: this.options.bridge.version,
+      connectedClients: this.connections.size,
+      uptimeSeconds: Math.round((Date.now() - this.startedAt) / 1_000),
+      requests: Object.fromEntries([...this.requestCounts].sort((left, right) => right[1] - left[1])),
+      unsupported: Object.fromEntries(this.unsupported),
+      refused: Object.fromEntries(this.unanswered),
+      recent: [...this.recentRequests],
+    }
+  }
 
   /** Configuration facts the harness knows about this daemon. */
   private daemonConfig(): Record<string, unknown> {
@@ -1886,6 +1928,12 @@ export class PaseoDaemon {
       writable: false,
     }
   }
+
+  /** Requests seen by type, and the newest few hundred in order. */
+  private readonly requestCounts = new Map<string, number>()
+  private readonly unsupported = new Map<string, number>()
+  private readonly unanswered = new Map<string, number>()
+  private readonly recentRequests: Array<{ type: string; at: string }> = []
 
   /** Instant this daemon started, for the diagnostics snapshot. */
   private readonly startedAt = Date.now()

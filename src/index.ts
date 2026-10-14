@@ -50,6 +50,9 @@ export const ROUTE_STATUS = '/api/status'
 /** Route the Paseo CLI probes for liveness. */
 export const ROUTE_HEALTH = '/api/health'
 
+/** Request report, for tracing what a client asked for. */
+export const ROUTE_DIAGNOSTICS = '/paseo/diagnostics'
+
 /** Download endpoint the Paseo client builds from a token. */
 export const ROUTE_DOWNLOAD = '/api/files/download'
 
@@ -297,6 +300,14 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
         res.end(svg)
       },
     }), 'paseo-server: pairing QR route')
+
+    // What clients asked for, so an empty list on a client can be traced to a
+    // request this daemon could not answer instead of guessed at.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: ROUTE_DIAGNOSTICS,
+      handler: (_req, res) => { sendJson(res, 200, daemon.requestReport()) },
+    }), 'paseo-server: diagnostics route')
 
     // The client downloads a file through a single-use token, which is the
     // Paseo download contract: /api/files/download?token=...

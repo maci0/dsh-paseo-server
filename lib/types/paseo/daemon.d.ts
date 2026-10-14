@@ -75,13 +75,35 @@ export declare class PaseoDaemon {
     private onBinaryFrame;
     /** Route one inbound text frame. */
     private onFrame;
-    /** Answer one request message. */
+    /**
+     * Answer one request message.
+     *
+     * Every request is counted by type, and one this daemon does not answer is
+     * recorded with its type, so a client that asks for something unsupported is
+     * visible instead of silently empty.
+     */
     private dispatch;
     private readonly workspaceCache;
     /** Last known descriptor of every terminal, for change notifications. */
     private readonly terminalCache;
+    /** Count one request by type, keeping the newest few hundred for inspection. */
+    private countRequest;
+    /**
+     * What clients have asked this daemon.
+     *
+     * An empty conversation list on a client is either a client that never
+     * asked or a request this daemon could not answer, and this is what tells
+     * the two apart.
+     * @returns counts by request type, the unsupported ones, and the newest requests.
+     */
+    requestReport(): Record<string, unknown>;
     /** Configuration facts the harness knows about this daemon. */
     private daemonConfig;
+    /** Requests seen by type, and the newest few hundred in order. */
+    private readonly requestCounts;
+    private readonly unsupported;
+    private readonly unanswered;
+    private readonly recentRequests;
     /** Instant this daemon started, for the diagnostics snapshot. */
     private readonly startedAt;
     /** Outstanding download tokens, redeemed by the HTTP route. */

@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.16.0
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.16.1
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -74,6 +74,18 @@ is a timeline row.
   relay and deny service. Set `passwordEnv` to require a password on `hello`
   for defence in depth.
 - The identity files are written owner-only (`0600`).
+
+## Diagnosing an empty client
+
+`/paseo/diagnostics` reports what clients asked: a count per request type, the
+ones this daemon could not answer, and the newest 300 requests with their
+timestamps. An empty conversation list is either a client that never reached
+this daemon or a request it could not answer, and that endpoint tells the two
+apart.
+
+```bash
+curl -s localhost:3080/paseo/diagnostics
+```
 
 ## Status
 

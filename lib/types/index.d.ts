@@ -23,6 +23,8 @@ export declare const ROUTE_PAIRING_QR = "/paseo/pairing.svg";
 export declare const ROUTE_STATUS = "/api/status";
 /** Route the Paseo CLI probes for liveness. */
 export declare const ROUTE_HEALTH = "/api/health";
+/** Request report, for tracing what a client asked for. */
+export declare const ROUTE_DIAGNOSTICS = "/paseo/diagnostics";
 /** Download endpoint the Paseo client builds from a token. */
 export declare const ROUTE_DOWNLOAD = "/api/files/download";
 /** WebSocket path the Paseo client connects to. */

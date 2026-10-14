@@ -1177,3 +1177,20 @@ test('an automatic icon source clears whatever was stored', async () => {
   await client.settle()
   assert.deepEqual(calls, [{ id: 'prj_1', icon: null }])
 })
+
+test('the request report counts what clients asked for', async () => {
+  const { bridge } = fakeBridge()
+  const daemon = makeDaemon(bridge)
+  const client = connect(daemon)
+  client.hello()
+  client.request({ type: 'fetch_workspaces_request', requestId: 'r1' })
+  await client.settle()
+  client.request({ type: 'no_such_request', requestId: 'r2' })
+  await client.settle()
+
+  const report = daemon.requestReport()
+  assert.equal((report.requests as Record<string, number>).fetch_workspaces_request, 1)
+  assert.equal((report.unsupported as Record<string, number>).no_such_request, 1)
+  assert.equal((report.recent as readonly unknown[]).length, 2)
+  assert.equal(report.connectedClients, 1)
+})
