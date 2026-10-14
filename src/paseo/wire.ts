@@ -8,6 +8,7 @@
  * @module dsh-paseo-server/paseo/wire
  */
 
+import type { PullRequestLookup } from '../dsh/forge.ts'
 import type { DiffFile, GitStatus } from '../dsh/git.ts'
 import type {
   AgentRecord,
@@ -83,6 +84,7 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'schedule/update',
   'schedule/logs',
   'checkout_status_request',
+  'checkout_pr_status_request',
   'checkout_commit_request',
   'checkout_push_request',
   'checkout_pull_request',
@@ -906,5 +908,46 @@ function scheduleSummary(record: ScheduleRecord): Record<string, unknown> {
     pausedAt: null,
     expiresAt: null,
     maxRuns: null,
+  }
+}
+
+/** `checkout_pr_status_response`. */
+export function checkoutPrStatusResponse(
+  requestId: string,
+  directory: string,
+  lookup: PullRequestLookup,
+): Record<string, unknown> {
+  const status = lookup.status
+  return {
+    type: 'checkout_pr_status_response',
+    payload: {
+      cwd: directory,
+      status: status === null
+        ? null
+        : {
+            forge: 'github',
+            projectPath: directory,
+            number: status.number,
+            url: status.url,
+            title: status.title,
+            state: status.state,
+            baseRefName: status.baseRefName,
+            headRefName: status.headRefName,
+            isMerged: status.isMerged,
+            isDraft: status.isDraft,
+            mergeable: status.mergeable,
+            checks: status.checks.map((check) => ({ name: check.name, status: check.status, url: check.url })),
+            checksStatus: null,
+            reviewDecision: null,
+            repoOwner: status.repoOwner,
+            repoName: status.repoName,
+          },
+      // Features follow authentication, not whether this branch happens to have a pull request.
+      githubFeaturesEnabled: lookup.authenticated,
+      authState: lookup.authenticated ? 'authenticated' : 'unauthenticated',
+      forge: 'github',
+      error: lookup.error === null ? null : { code: 'UNKNOWN', message: lookup.error },
+      requestId,
+    },
   }
 }

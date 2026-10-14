@@ -74,6 +74,7 @@ function fakeBridge() {
     async commitCheckout() { return { success: true } },
     async pushCheckout() { return { success: true } },
     async pullCheckout() { return { success: true } },
+    async checkoutPrStatus() { return { status: null, authenticated: false, error: null } },
     async listTerminals() { return [] },
     async createTerminal() { throw new Error('unused') },
     async followTerminal() { return () => {} },

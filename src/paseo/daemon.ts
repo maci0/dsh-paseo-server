@@ -32,6 +32,7 @@ import {
   cancelResponse,
   checkoutDiffGetResponse,
   checkoutDiffUpdate,
+  checkoutPrStatusResponse,
   checkoutStatusResponse,
   subscribeCheckoutDiffResponse,
   daemonStatus,
@@ -440,6 +441,20 @@ export class PaseoDaemon {
           }
           const timeoutMs = typeof message.timeoutMs === 'number' && message.timeoutMs > 0 ? message.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS
           this.waitForSettle(connection, requestId, agent, timeoutMs)
+          return
+        }
+        case 'checkout_pr_status_request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(rpcError(requestId, type, 'cwd is required', 'invalid_request'))
+            return
+          }
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          reply(checkoutPrStatusResponse(requestId, known, await this.options.bridge.checkoutPrStatus(known)))
           return
         }
         case 'checkout_status_request': {

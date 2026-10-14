@@ -12,7 +12,9 @@
 
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
+import { forgeToken, lookupPullRequest, parseGithubRemote } from './forge.ts'
 import { commitCheckout, pullCheckout, pushCheckout, readDiff, readGitStatus } from './git.ts'
+import type { PullRequestLookup } from './forge.ts'
 import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './git.ts'
 import { fromPaseoCadence, toPaseoCadence } from './schedules.ts'
 import { readWorkspaceScripts } from './scripts.ts'
@@ -206,6 +208,15 @@ class DshBridge implements PaseoBridge {
   /** Fast-forward one directory from its upstream. */
   async pullCheckout(directory: string): Promise<GitOperationResult> {
     return pullCheckout(directory)
+  }
+
+  /** Pull request facts for one directory's current branch. */
+  async checkoutPrStatus(directory: string): Promise<PullRequestLookup> {
+    const status = await readGitStatus(directory)
+    if (!status.isGit || status.currentBranch === null) return { status: null, authenticated: false, error: null }
+    const remote = parseGithubRemote(status.remoteUrl)
+    if (remote === null) return { status: null, authenticated: false, error: null }
+    return lookupPullRequest(remote, status.currentBranch, forgeToken())
   }
 
   /** Archive one session, which removes it from the active agent list. */

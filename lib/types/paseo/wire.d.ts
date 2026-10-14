@@ -7,6 +7,7 @@
  *
  * @module dsh-paseo-server/paseo/wire
  */
+import type { PullRequestLookup } from '../dsh/forge.ts';
 import type { DiffFile, GitStatus } from '../dsh/git.ts';
 import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord, ScheduleRecord, WorkspaceScriptRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
@@ -195,3 +196,5 @@ export declare function scheduleCreated(requestId: string, schedule: ScheduleRec
 export declare function scheduleDeleted(requestId: string, scheduleId: string, error?: string | null): Record<string, unknown>;
 /** `schedule/run-once/response`. */
 export declare function scheduleRanOnce(requestId: string, scheduleId: string, error?: string | null): Record<string, unknown>;
+/** `checkout_pr_status_response`. */
+export declare function checkoutPrStatusResponse(requestId: string, directory: string, lookup: PullRequestLookup): Record<string, unknown>;

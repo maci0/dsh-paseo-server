@@ -9,6 +9,7 @@
  */
 
 import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './dsh/git.ts'
+import type { PullRequestLookup } from './dsh/forge.ts'
 import type { PaseoCadence } from './dsh/schedules.ts'
 
 /** Disposer returned by every subscription. */
@@ -196,6 +197,8 @@ export interface PaseoBridge {
   pushCheckout(directory: string): Promise<GitOperationResult>
   /** Fast-forward one workspace directory from its upstream. */
   pullCheckout(directory: string): Promise<GitOperationResult>
+  /** Pull request facts for the current branch of one workspace directory. */
+  checkoutPrStatus(directory: string): Promise<PullRequestLookup>
   /** Archive an agent, removing it from the active list. Resolves the archive instant. */
   archiveAgent(agentId: string): Promise<string>
   /** Interrupt one agent's active turn, if any. */

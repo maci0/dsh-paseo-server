@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.11.0
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.12.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -82,7 +82,8 @@ relay transport with end-to-end encryption, workspace and agent listing, agent
 creation (both `agent.create.request` and the legacy `create_agent_request`),
 timeline reads, prompt send with image attachments, interrupt, archive, the
 checkout status, diff, commit, push, and pull, terminals over the binary
-stream protocol, workspace scripts as background jobs, reminders,
+stream protocol, workspace scripts as background jobs, reminders, pull
+request facts,
 wait-for-finish, provider and model catalogs, and the pairing card with its QR.
 
 A full turn was driven end to end: `paseo run --provider <p>/<m>` created a DSH

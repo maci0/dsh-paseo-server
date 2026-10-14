@@ -78,11 +78,20 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 
 ## Still to build
 
-Forge panels are the one Paseo surface with no DSH counterpart: pull requests,
-checks, and forge search need a forge client, which the harness does not ship
-and this plugin will not guess at.
+The harness ships no forge client, so the forge surface is the one place this
+plugin talks to a service of its own. Pull request facts come from GitHub's
+REST API with a token from `GH_TOKEN` or `GITHUB_TOKEN`; without one, or for a
+remote that is not GitHub, the panel stays hidden and the daemon says why.
+Creating, merging, reviewing, and the pull request timeline are not bridged:
+each needs a forge client this plugin does not have.
 
-## Reminders
+## Pull requests
+
+`checkout_pr_status_request` resolves the workspace's `origin` remote, asks
+GitHub for the pull request whose head is the current branch, and reports the
+number, URL, title, state, refs, draft and merged flags, and mergeability.
+Checks and review decisions are reported empty rather than guessed, because
+reading them needs a second API surface.
 
 Paseo schedules a prompt against an agent on an interval or a cron expression;
 DSH stores the same thing per Session. The mapping is direct: the Paseo target
