@@ -89,15 +89,25 @@ principle; this table tracks what is left.
 | Workspace scripts | The DSH job registry. |
 | Schedules and heartbeats | The DSH schedule plugin's own store. |
 | Agent delete | Session removal, once the persistence service exposes it. |
-| Git diff, commit, push, pull | The `git` binary, as checkout status already reads it. |
+| Git commit, push, pull | The `git` binary, as checkout status and diff already read it. |
 | Forge panels and pull requests | A forge client, which the harness does not ship. |
 
 ## Git surface
 
 `checkout_status_request` reads the repository directly: root, current branch,
 dirty state, origin URL, upstream ref, and the ahead/behind counts against that
-upstream. Only directories this daemon advertised are read, so the request
-cannot be used as a path probe.
+upstream.
+
+`checkout.diff.get.request` returns the parsed diff: one entry per changed file
+with its hunks and typed lines, so the client renders additions and deletions
+without parsing anything itself. `subscribe_checkout_diff_request` opens a
+bounded poll: the daemon re-reads the diff and sends `checkout_diff_update` only
+when the parsed result changed. Git has no watch API, so a poll is the honest
+mechanism; the subscription ends when the client unsubscribes or its socket
+closes.
+
+Only directories this daemon advertised are read, so neither request can be
+used as a path probe into the operator's machine.
 
 ## Deferred
 

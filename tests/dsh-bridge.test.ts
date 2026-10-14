@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createDshBridge, promptParts } from '../src/dsh/bridge.ts'
+import { parseUnifiedDiff } from '../src/dsh/git.ts'
 import type { HostContext, SessionEventLike } from '../src/host.ts'
 
 /** Context whose services the test drives directly. */
@@ -146,4 +147,66 @@ test('an image-only prompt carries no empty text part', () => {
 
 test('a text-only prompt carries one text part', () => {
   assert.deepEqual(promptParts({ text: 'hello' }), [{ type: 'text', text: 'hello' }])
+})
+
+test('a unified diff parses into files, hunks, and lines', () => {
+  const diff = [
+    'diff --git a/src/a.ts b/src/a.ts',
+    'index 111..222 100644',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,3 +1,4 @@',
+    ' const one = 1',
+    '-const two = 2',
+    '+const two = 22',
+    '+const three = 3',
+    ' const four = 4',
+    'diff --git a/new.txt b/new.txt',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/new.txt',
+    '@@ -0,0 +1,1 @@',
+    '+hello',
+  ].join('\n')
+  const files = parseUnifiedDiff(diff)
+  assert.equal(files.length, 2)
+  assert.deepEqual(files[0], {
+    path: 'src/a.ts',
+    oldPath: 'src/a.ts',
+    isNew: false,
+    isDeleted: false,
+    additions: 2,
+    deletions: 1,
+    hunks: [{
+      oldStart: 1,
+      oldCount: 3,
+      newStart: 1,
+      newCount: 4,
+      lines: [
+        { type: 'context', content: 'const one = 1' },
+        { type: 'remove', content: 'const two = 2' },
+        { type: 'add', content: 'const two = 22' },
+        { type: 'add', content: 'const three = 3' },
+        { type: 'context', content: 'const four = 4' },
+      ],
+    }],
+  })
+  assert.equal(files[1]?.path, 'new.txt')
+  assert.equal(files[1]?.isNew, true)
+  assert.equal(files[1]?.additions, 1)
+  assert.equal(files[1]?.deletions, 0)
+})
+
+test('a binary file is reported as binary, not as empty text', () => {
+  const files = parseUnifiedDiff([
+    'diff --git a/logo.png b/logo.png',
+    'index 111..222 100644',
+    'Binary files a/logo.png and b/logo.png differ',
+  ].join('\n'))
+  assert.equal(files[0]?.status, 'binary')
+  assert.equal(files[0]?.path, 'logo.png')
+})
+
+test('an empty diff parses to no files', () => {
+  assert.deepEqual(parseUnifiedDiff(''), [])
 })

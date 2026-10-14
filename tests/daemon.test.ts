@@ -70,6 +70,7 @@ function fakeBridge() {
     async cancelAgent() {},
     async archiveAgent() { return new Date().toISOString() },
     async checkoutStatus() { return { isGit: false, repoRoot: null, currentBranch: null, isDirty: false, hasRemote: false, remoteUrl: null, upstreamRef: null, aheadOfOrigin: null, behindOfOrigin: null } },
+    async checkoutDiff() { return [] },
     async createWorkspace(input) { created.push(input); return workspace() },
     async archiveWorkspace() {},
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
@@ -382,4 +383,43 @@ test('the pairing offer carries the generated terminal QR', async () => {
   const payload = client.last().payload as Record<string, unknown>
   assert.equal(payload.qr, 'QR')
   assert.match(String(payload.url), /#offer=/)
+})
+
+test('checkout.diff.get.request answers with the parsed files', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'workspace.create.request', requestId: 'r0', source: { kind: 'directory', path: '/repo' } })
+  await client.settle()
+  client.request({ type: 'checkout.diff.get.request', requestId: 'r1', cwd: '/repo', compare: { mode: 'uncommitted' } })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'checkout.diff.get.response')
+  assert.equal(payload.cwd, '/repo')
+  assert.deepEqual(payload.files, [])
+  assert.equal(payload.error, null)
+})
+
+test('a diff subscription opens with a subscription id and stops on unsubscribe', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'workspace.create.request', requestId: 'r0', source: { kind: 'directory', path: '/repo' } })
+  await client.settle()
+  client.request({
+    type: 'subscribe_checkout_diff_request',
+    requestId: 'r1',
+    cwd: '/repo',
+    compare: { mode: 'base', baseRef: 'main' },
+    subscriptionId: 'sub_1',
+  })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'subscribe_checkout_diff_response')
+  assert.equal(payload.subscriptionId, 'sub_1')
+  assert.equal(payload.requestId, 'r1')
+
+  client.request({ type: 'unsubscribe_checkout_diff_request', subscriptionId: 'sub_1' })
+  await client.settle()
+  assert.equal(client.last().type, 'subscribe_checkout_diff_response')
 })

@@ -6,6 +6,7 @@
  */
 
 import type { AgentRecord, BridgeEvent, PaseoBridge, WorkspaceRecord } from '../bridge.ts'
+import type { DiffCompare, DiffFile } from '../dsh/git.ts'
 import type { WireSocket } from './transport.ts'
 import {
   agentRemoved,
@@ -20,7 +21,10 @@ import {
   agentsResponse,
   attentionCleared,
   cancelResponse,
+  checkoutDiffGetResponse,
+  checkoutDiffUpdate,
   checkoutStatusResponse,
+  subscribeCheckoutDiffResponse,
   daemonStatus,
   eventsSubscriptionSet,
   envelope,
@@ -46,6 +50,9 @@ import {
 
 /** Default `wait_for_finish_request` deadline when the client names none. */
 const DEFAULT_WAIT_TIMEOUT_MS = 600_000
+
+/** How often a subscribed diff is re-read, in milliseconds. */
+const DIFF_POLL_INTERVAL_MS = 4_000
 
 /** Minimal logger surface; matches Cordis `ctx.logger`. */
 export interface Logger {
@@ -82,6 +89,8 @@ interface Connection {
   readonly socket: WireSocket
   ready: boolean
   closed: boolean
+  /** Live checkout-diff subscriptions, keyed by subscription id. */
+  readonly diffWatches: Map<string, ReturnType<typeof setInterval>>
 }
 
 /** Live event fan-out plus request dispatch for every connected client. */
@@ -124,12 +133,13 @@ export class PaseoDaemon {
    * @returns the connection handle for that socket.
    */
   attach(socket: WireSocket): PaseoConnection {
-    const connection: Connection = { socket, ready: false, closed: false }
+    const connection: Connection = { socket, ready: false, closed: false, diffWatches: new Map() }
     this.connections.add(connection)
     return {
       receive: (text: string) => { this.onFrame(connection, text) },
       dispose: () => {
         connection.closed = true
+        for (const subscriptionId of [...connection.diffWatches.keys()]) this.stopDiffWatch(connection, subscriptionId)
         this.connections.delete(connection)
       },
     }
@@ -393,6 +403,34 @@ export class PaseoDaemon {
           reply(checkoutStatusResponse(requestId, known, await this.options.bridge.checkoutStatus(known)))
           return
         }
+        case 'checkout.diff.get.request':
+        case 'subscribe_checkout_diff_request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(rpcError(requestId, type, 'cwd is required', 'invalid_request'))
+            return
+          }
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          const compare = compareOf(message)
+          const files = await this.options.bridge.checkoutDiff(known, compare)
+          if (type === 'checkout.diff.get.request') {
+            reply(checkoutDiffGetResponse(requestId, known, files))
+            return
+          }
+          const subscriptionId = stringField(message, 'subscriptionId') ?? `diff_${requestId}`
+          reply(subscribeCheckoutDiffResponse(requestId, subscriptionId, known, files))
+          this.watchDiff(connection, subscriptionId, known, compare, files)
+          return
+        }
+        case 'unsubscribe_checkout_diff_request': {
+          const subscriptionId = stringField(message, 'subscriptionId')
+          if (subscriptionId !== undefined) this.stopDiffWatch(connection, subscriptionId)
+          return
+        }
         case 'daemon.get_status.request': {
           reply(daemonStatus({
             requestId,
@@ -502,6 +540,47 @@ export class PaseoDaemon {
    * @param directory - directory the client asked about.
    * @returns the canonical known directory, or null when nothing matches.
    */
+  /**
+   * Poll one directory's diff and tell the client when it changed.
+   *
+   * Git has no watch API, so a subscription is a bounded poll. Only a changed
+   * serialization is sent, which keeps an idle working tree silent.
+   */
+  private watchDiff(
+    connection: Connection,
+    subscriptionId: string,
+    directory: string,
+    compare: DiffCompare,
+    initial: readonly DiffFile[],
+  ): void {
+    this.stopDiffWatch(connection, subscriptionId)
+    let previous = JSON.stringify(initial)
+    const timer = setInterval(() => {
+      if (connection.closed) {
+        this.stopDiffWatch(connection, subscriptionId)
+        return
+      }
+      void this.options.bridge.checkoutDiff(directory, compare).then((files) => {
+        const next = JSON.stringify(files)
+        if (connection.closed || next === previous) return
+        previous = next
+        connection.socket.send(envelope(checkoutDiffUpdate(subscriptionId, directory, files)))
+      }).catch(() => {
+        // A poll that fails leaves the previous diff in place; the next tick retries.
+      })
+    }, DIFF_POLL_INTERVAL_MS)
+    timer.unref?.()
+    connection.diffWatches.set(subscriptionId, timer)
+  }
+
+  /** Drop one live diff subscription. */
+  private stopDiffWatch(connection: Connection, subscriptionId: string): void {
+    const timer = connection.diffWatches.get(subscriptionId)
+    if (timer === undefined) return
+    clearInterval(timer)
+    connection.diffWatches.delete(subscriptionId)
+  }
+
   private async knownDirectory(directory: string): Promise<string | null> {
     const cached = [...this.workspaceCache.values()].find((workspace) => workspace.directory === directory)
     if (cached !== undefined) return cached.directory
@@ -598,4 +677,17 @@ function imagesOf(message: Record<string, unknown>): readonly { readonly data: s
     return typeof data === 'string' && typeof mimeType === 'string' ? [{ data, mimeType }] : []
   })
   return images.length === 0 ? undefined : images
+}
+
+/** Comparison a diff request asked for, defaulting to the working tree. */
+function compareOf(message: Record<string, unknown>): DiffCompare {
+  const compare = recordValue(message.compare)
+  const mode = compare === undefined ? undefined : stringField(compare, 'mode')
+  const baseRef = compare === undefined ? undefined : stringField(compare, 'baseRef')
+  const ignoreWhitespace = compare?.['ignoreWhitespace'] === true
+  return {
+    mode: mode === 'base' ? 'base' : 'uncommitted',
+    ...(baseRef === undefined ? {} : { baseRef }),
+    ...(ignoreWhitespace ? { ignoreWhitespace: true } : {}),
+  }
 }

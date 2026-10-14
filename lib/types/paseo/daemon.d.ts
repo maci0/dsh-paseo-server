@@ -75,6 +75,15 @@ export declare class PaseoDaemon {
      * @param directory - directory the client asked about.
      * @returns the canonical known directory, or null when nothing matches.
      */
+    /**
+     * Poll one directory's diff and tell the client when it changed.
+     *
+     * Git has no watch API, so a subscription is a bounded poll. Only a changed
+     * serialization is sent, which keeps an idle working tree silent.
+     */
+    private watchDiff;
+    /** Drop one live diff subscription. */
+    private stopDiffWatch;
     private knownDirectory;
     /** Push one bridge event to every admitted client. */
     private onBridgeEvent;

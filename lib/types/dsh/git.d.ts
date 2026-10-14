@@ -27,3 +27,46 @@ export interface GitStatus {
  * @returns the state, or the not-a-repository state when git cannot answer.
  */
 export declare function readGitStatus(directory: string): Promise<GitStatus>;
+/** One line of a hunk, as the Paseo client renders it. */
+export interface DiffLine {
+    readonly type: 'add' | 'remove' | 'context' | 'header';
+    readonly content: string;
+}
+/** One hunk of a file diff. */
+export interface DiffHunk {
+    readonly oldStart: number;
+    readonly oldCount: number;
+    readonly newStart: number;
+    readonly newCount: number;
+    readonly lines: readonly DiffLine[];
+}
+/** One changed file. */
+export interface DiffFile {
+    readonly path: string;
+    readonly oldPath?: string;
+    readonly isNew: boolean;
+    readonly isDeleted: boolean;
+    readonly additions: number;
+    readonly deletions: number;
+    readonly hunks: readonly DiffHunk[];
+    readonly status?: 'ok' | 'too_large' | 'binary';
+}
+/** Which comparison a client asked for. */
+export interface DiffCompare {
+    readonly mode: 'uncommitted' | 'base';
+    readonly baseRef?: string;
+    readonly ignoreWhitespace?: boolean;
+}
+/**
+ * Read a diff for one directory.
+ * @param directory - absolute directory to inspect.
+ * @param compare - which comparison to run.
+ * @returns parsed changed files, empty when git cannot answer.
+ */
+export declare function readDiff(directory: string, compare: DiffCompare): Promise<readonly DiffFile[]>;
+/**
+ * Parse unified diff output into the client's file and hunk shape.
+ * @param diff - `git diff` output.
+ * @returns one entry per changed file.
+ */
+export declare function parseUnifiedDiff(diff: string): DiffFile[];

@@ -8,7 +8,7 @@
  * @module dsh-paseo-server/paseo/wire
  */
 
-import type { GitStatus } from '../dsh/git.ts'
+import type { DiffFile, GitStatus } from '../dsh/git.ts'
 import type { AgentRecord, AgentStatus, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts'
 
 /** Protocol version the 0.11.2 client sends and expects. */
@@ -54,6 +54,9 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'session.events.set_subscription.request',
   'clear_agent_attention',
   'checkout_status_request',
+  'checkout.diff.get.request',
+  'subscribe_checkout_diff_request',
+  'unsubscribe_checkout_diff_request',
   'archive_agent_request',
   'close_items_request',
   'workspace.mark_unread.request',
@@ -591,6 +594,53 @@ export function checkoutStatusResponse(requestId: string, directory: string, sta
       upstreamRef: status.upstreamRef,
     },
   }
+}
+
+/** Shared body of every checkout-diff frame. */
+function diffPayload(directory: string, files: readonly DiffFile[]): Record<string, unknown> {
+  return {
+    cwd: directory,
+    files: files.map((file) => ({
+      path: file.path,
+      ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+      isNew: file.isNew,
+      isDeleted: file.isDeleted,
+      additions: file.additions,
+      deletions: file.deletions,
+      hunks: file.hunks.map((hunk) => ({
+        oldStart: hunk.oldStart,
+        oldCount: hunk.oldCount,
+        newStart: hunk.newStart,
+        newCount: hunk.newCount,
+        lines: hunk.lines.map((line) => ({ type: line.type, content: line.content })),
+      })),
+      ...(file.status === undefined ? {} : { status: file.status }),
+    })),
+    error: null,
+  }
+}
+
+/** `checkout.diff.get.response`, the one-shot read. */
+export function checkoutDiffGetResponse(requestId: string, directory: string, files: readonly DiffFile[]): Record<string, unknown> {
+  return { type: 'checkout.diff.get.response', payload: { ...diffPayload(directory, files), requestId } }
+}
+
+/** `subscribe_checkout_diff_response`, the opening frame of a live subscription. */
+export function subscribeCheckoutDiffResponse(
+  requestId: string,
+  subscriptionId: string,
+  directory: string,
+  files: readonly DiffFile[],
+): Record<string, unknown> {
+  return {
+    type: 'subscribe_checkout_diff_response',
+    payload: { subscriptionId, ...diffPayload(directory, files), requestId },
+  }
+}
+
+/** `checkout_diff_update`, sent when the working tree changed under a subscription. */
+export function checkoutDiffUpdate(subscriptionId: string, directory: string, files: readonly DiffFile[]): Record<string, unknown> {
+  return { type: 'checkout_diff_update', payload: { subscriptionId, ...diffPayload(directory, files) } }
 }
 
 /** `agent_update` upsert. */

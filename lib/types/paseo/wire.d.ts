@@ -7,7 +7,7 @@
  *
  * @module dsh-paseo-server/paseo/wire
  */
-import type { GitStatus } from '../dsh/git.ts';
+import type { DiffFile, GitStatus } from '../dsh/git.ts';
 import type { AgentRecord, AgentStatus, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
 export declare const PASEO_PROTOCOL_VERSION = 1;
@@ -128,6 +128,12 @@ export declare function availableProvidersResponse(requestId: string, providers:
 export declare function providerModesResponse(requestId: string, provider: string): Record<string, unknown>;
 /** `checkout_status_response` for one directory. */
 export declare function checkoutStatusResponse(requestId: string, directory: string, status: GitStatus): Record<string, unknown>;
+/** `checkout.diff.get.response`, the one-shot read. */
+export declare function checkoutDiffGetResponse(requestId: string, directory: string, files: readonly DiffFile[]): Record<string, unknown>;
+/** `subscribe_checkout_diff_response`, the opening frame of a live subscription. */
+export declare function subscribeCheckoutDiffResponse(requestId: string, subscriptionId: string, directory: string, files: readonly DiffFile[]): Record<string, unknown>;
+/** `checkout_diff_update`, sent when the working tree changed under a subscription. */
+export declare function checkoutDiffUpdate(subscriptionId: string, directory: string, files: readonly DiffFile[]): Record<string, unknown>;
 /** `agent_update` upsert. */
 export declare function agentUpdate(agent: AgentRecord, workspace: WorkspaceRecord | null): Record<string, unknown>;
 /** `agent_update` remove. */
