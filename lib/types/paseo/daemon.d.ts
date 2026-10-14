@@ -1,0 +1,87 @@
+/**
+ * Paseo daemon: one WebSocket session per connected Paseo client, plus the
+ * fan-out of live agent, workspace, and timeline events from the bridge.
+ *
+ * @module dsh-paseo-server/paseo/daemon
+ */
+import type { AgentRecord, PaseoBridge } from '../bridge.ts';
+import type { WireSocket } from './transport.ts';
+/** Minimal logger surface; matches Cordis `ctx.logger`. */
+export interface Logger {
+    debug(message: string): void;
+    info(message: string): void;
+    warn(message: string): void;
+}
+/** What the daemon needs to publish a pairing offer. */
+export interface PairingOffer {
+    readonly url: string;
+    readonly relayEnabled: boolean;
+}
+/** Daemon construction options. */
+export interface DaemonOptions {
+    readonly bridge: PaseoBridge;
+    readonly logger: Logger;
+    readonly hostname: string;
+    /** Relay endpoint host:port, when relay transport is enabled. */
+    readonly relayEndpoint?: string;
+    /** Shared secret a client must present in `hello`; empty accepts anyone. */
+    readonly password?: string;
+    /** Address the daemon listens on, for the status report; null when unknown. */
+    readonly listen?: string;
+    /** Supplies the current pairing offer, evaluated per request. */
+    readonly pairingOffer: () => PairingOffer;
+}
+/** Live event fan-out plus request dispatch for every connected client. */
+export declare class PaseoDaemon {
+    private readonly options;
+    private readonly connections;
+    private unsubscribe;
+    private closed;
+    constructor(options: DaemonOptions);
+    /** Start listening to bridge events. */
+    start(): void;
+    /** Stop the fan-out; transport sockets are owned by the caller. */
+    stop(): void;
+    /** Number of admitted clients, for diagnostics. */
+    get size(): number;
+    /**
+     * Admit one transport socket as a Paseo client.
+     *
+     * The transport owns its own listeners and drives this handle: it calls
+     * {@link PaseoConnection.receive} per text frame and
+     * {@link PaseoConnection.dispose} when the peer goes away.
+     * @param socket - transport to speak the protocol over.
+     * @returns the connection handle for that socket.
+     */
+    attach(socket: WireSocket): PaseoConnection;
+    /** Route one inbound text frame. */
+    private onFrame;
+    /** Answer one request message. */
+    private dispatch;
+    private readonly workspaceCache;
+    /** Pending `wait_for_finish_request` waiters, keyed by agent id. */
+    private readonly waiters;
+    /** Resolve when an agent settles, or after the client's timeout. */
+    private waitForSettle;
+    private dropWaiter;
+    /** Settle every waiter watching an agent that just finished. */
+    private settleWaiters;
+    private cacheWorkspaces;
+    private workspaceFor;
+    /** Push one bridge event to every admitted client. */
+    private onBridgeEvent;
+    private publishAgentEvent;
+    private publishTimeline;
+    private broadcast;
+}
+/** Stable per-agent epoch the client uses to reject cross-epoch cursors. */
+export declare function epochFor(agentId: string): string;
+/** Handle for one admitted transport socket. */
+export interface PaseoConnection {
+    /** Feed one inbound text frame. */
+    receive(text: string): void;
+    /** Drop the connection without touching the socket. */
+    dispose(): void;
+}
+/** Narrow a value to an agent record, for embedders. */
+export declare function isAgentRecord(value: unknown): value is AgentRecord;
