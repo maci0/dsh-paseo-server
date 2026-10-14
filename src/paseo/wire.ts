@@ -95,9 +95,11 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'archive_agent_request',
   'close_items_request',
   'workspace.mark_unread.request',
-  'list_terminals_request',
   'subscribe_terminals_request',
   'unsubscribe_terminals_request',
+  'get_providers_snapshot_request',
+  'list_available_providers_request',
+  'list_provider_models_request',
 ]
 
 /**

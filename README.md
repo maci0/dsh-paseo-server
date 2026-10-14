@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.12.0
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.12.1
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -83,18 +83,31 @@ creation (both `agent.create.request` and the legacy `create_agent_request`),
 timeline reads, prompt send with image attachments, interrupt, archive, the
 checkout status, diff, commit, push, and pull, terminals over the binary
 stream protocol, workspace scripts as background jobs, reminders, pull
-request facts,
-wait-for-finish, provider and model catalogs, and the pairing card with its QR.
+request facts, wait-for-finish, provider and model catalogs, and the pairing
+card with its QR.
 
 A full turn was driven end to end: `paseo run --provider <p>/<m>` created a DSH
 session, the harness ran the model call, and the client read the reply back from
-the timeline, both over a direct socket and through `relay.paseo.sh`.
+the timeline, both over a direct socket and through `relay.paseo.sh`. The
+protocol surface was then walked in one pass (`server_info`, workspace and
+agent listing, timeline, checkout status, diff, pull request, reminders,
+terminals, scripts, pairing offer, provider catalog), each against the running
+daemon.
 
 Every persisted session is an agent too, not only the ones live in the running
 process. A session the harness is not holding shows as idle, its transcript
 still reads, and prompting it resumes the session and runs the turn.
 
-Not mapped: terminals, workspace scripts, git and forge panels, schedules.
+Not mapped, and named here rather than implied. A one-shot DSH reminder has no
+Paseo cadence and stays out of the schedule listing. Reminder pause and resume
+have no DSH equivalent, and both answer with that reason. Forge work beyond
+reading a pull request (creating, merging, review threads, checks) needs a
+forge client the harness does not ship. A workspace script reports its declared
+port but no proxy URL, because nothing here publishes one. Paseo bookmarks and
+its diff editor are not bridged.
+
+The plugin's own card in the Plugins menu shows the pairing QR and a copy-ready
+offer URL; everything else a client needs comes over the protocol.
 
 ## Testing on the emulator
 
