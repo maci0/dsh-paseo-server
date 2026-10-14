@@ -108,8 +108,22 @@ but the build is ARM64-only and carries Google Play's PairIP integrity check.
 On an x86_64 emulator its native libraries must be present in the app's
 `lib/arm64` directory, and once it launches the license check refuses a
 copy that was not installed through Play. Install it from Play on a real
-device or on a Play-enabled emulator image instead. The web client at
-`app.paseo.sh` is the same client and pairs identically.
+device or on a Play-enabled emulator image instead.
+
+## Testing with a headless desktop client
+
+When the phone build will not cooperate, the desktop shell is the same client
+without those restrictions. It runs under Xvfb in a container, and the DevTools
+protocol drives it:
+
+```bash
+PASEO_TARBALL=~/Downloads/Paseo-0.11.2-x64.tar.gz docker/run-headless.sh
+bun .scratch/cdp.ts open "$(curl -s localhost:3080/paseo/pairing | jq -r .url)"
+```
+
+See [docker/README.md](docker/README.md) for the whole flow. Verified: the
+client showed this daemon's server id, key fingerprint, and relay in its
+connect dialog, connected, and listed this daemon's DSH workspaces.
 
 ## Development
 
