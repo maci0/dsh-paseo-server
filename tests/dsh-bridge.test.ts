@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createDshBridge } from '../src/dsh/bridge.ts'
+import { createDshBridge, promptParts } from '../src/dsh/bridge.ts'
 import type { HostContext, SessionEventLike } from '../src/host.ts'
 
 /** Context whose services the test drives directly. */
@@ -46,7 +46,7 @@ function coldHost() {
           agentAvailable: false,
           blank: false,
           updatedAt: 1_760_000_001_000,
-          projections: { kind: 'cached', asOfSeq: 1, values: { title: 'Cold title' } },
+          projections: { kind: 'cached', asOfSeq: 1, values: { title: 'Cold title', modelSelection: { lastUsed: { provider: 'stub', model: 'stub-model' }, next: null } } },
         }],
       }),
       projections: async () => ({ kind: "sequenced", asOfSeq: 1, values: {} }),
@@ -76,7 +76,8 @@ test('a cold session is still an agent, with its projected title', async () => {
   assert.equal(agents[0]?.id, 'session-cold')
   assert.equal(agents[0]?.title, 'Cold title')
   assert.equal(agents[0]?.status, 'idle')
-  assert.equal(agents[0]?.provider, 'deepseek')
+  assert.equal(agents[0]?.provider, 'stub')
+  assert.equal(agents[0]?.model, 'stub-model')
   assert.equal((await bridge.getAgent('session-cold'))?.id, 'session-cold')
   assert.equal(await bridge.getAgent('missing'), null)
 })
@@ -119,4 +120,30 @@ test('an archived session is not listed as an active agent', async () => {
   // The agent itself still resolves, because a client that already holds its
   // tab may ask for it by id.
   assert.equal((await bridge.getAgent('session-cold'))?.id, 'session-cold')
+})
+
+test('a prompt becomes text and image content parts', () => {
+  const parts = promptParts({
+    text: 'look at this',
+    images: [
+      { data: 'AAAA', mimeType: 'image/png' },
+      { data: 'BBBB', mimeType: 'application/pdf' },
+      { data: 'CCCC', mimeType: 'image/jpeg' },
+    ],
+  })
+  assert.deepEqual(parts, [
+    { type: 'text', text: 'look at this' },
+    { type: 'image', mediaType: 'image/png', data: 'AAAA' },
+    { type: 'image', mediaType: 'image/jpeg', data: 'CCCC' },
+  ])
+})
+
+test('an image-only prompt carries no empty text part', () => {
+  assert.deepEqual(promptParts({ text: '   ', images: [{ data: 'AAAA', mimeType: 'image/webp' }] }), [
+    { type: 'image', mediaType: 'image/webp', data: 'AAAA' },
+  ])
+})
+
+test('a text-only prompt carries one text part', () => {
+  assert.deepEqual(promptParts({ text: 'hello' }), [{ type: 'text', text: 'hello' }])
 })

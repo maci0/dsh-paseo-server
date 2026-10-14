@@ -15,6 +15,7 @@ import type {
   AgentRecord,
   AgentStatus,
   BridgeEvent,
+  PromptInput,
   Disposable as BridgeDisposable,
   PaseoBridge,
   TimelineEntry,
@@ -28,6 +29,8 @@ import type {
   SessionControllerLike,
   SessionEventLike,
   SessionLike,
+  PromptPart,
+  ImageMediaType,
   SessionSummaryLike,
   SessionsLike,
   WorkspaceLike,
@@ -200,16 +203,18 @@ class DshBridge implements PaseoBridge {
     }
   }
 
-  async sendPrompt(agentId: string, text: string, clientMessageId?: string): Promise<void> {
+  async sendPrompt(agentId: string, prompt: PromptInput): Promise<void> {
     const controller = this.requireController()
-    if (clientMessageId !== undefined) this.pendingClientMessageIds.push({ agentId, clientMessageId })
+    if (prompt.clientMessageId !== undefined) {
+      this.pendingClientMessageIds.push({ agentId, clientMessageId: prompt.clientMessageId })
+    }
     await controller.prompt({
       requestId: randomUUID(),
       sessionId: agentId,
       mode: 'queue',
-      content: [{ type: 'text', text }],
+      content: promptParts(prompt),
     }, new AbortController().signal)
-    this.titles.set(agentId, titleFrom(text) ?? this.titles.get(agentId) ?? null)
+    this.titles.set(agentId, titleFrom(prompt.text) ?? this.titles.get(agentId) ?? null)
   }
 
   /**
@@ -233,6 +238,7 @@ class DshBridge implements PaseoBridge {
     readonly model?: string
     readonly title?: string
     readonly prompt?: string
+    readonly images?: readonly { readonly data: string; readonly mimeType: string }[]
   }): Promise<AgentRecord> {
     const controller = this.requireController()
     const directory = await this.directoryFor(input)
@@ -244,7 +250,7 @@ class DshBridge implements PaseoBridge {
       await controller.rename({ sessionId: created.sessionId, title: input.title })
     }
     if (input.title !== undefined) this.titles.set(created.sessionId, input.title)
-    if (input.prompt !== undefined && input.prompt.length > 0) await this.sendPrompt(created.sessionId, input.prompt)
+    if (input.prompt !== undefined && input.prompt.length > 0) await this.sendPrompt(created.sessionId, { text: input.prompt, ...(input.images === undefined ? {} : { images: input.images }) })
     const agent = await this.getAgent(created.sessionId)
     if (agent === null) throw new Error(`created session ${created.sessionId} has no live agent`)
     return agent
@@ -396,8 +402,8 @@ class DshBridge implements PaseoBridge {
       id: summary.sessionId,
       shortId: summary.sessionId.slice(-8),
       title: this.titles.get(summary.sessionId) ?? this.titleOf(session) ?? projectedTitle(summary),
-      provider: header?.config?.provider ?? this.defaultProvider,
-      model: header?.config?.model ?? this.defaultModel,
+      provider: header?.config?.provider ?? projectedSelection(summary)?.provider ?? this.defaultProvider,
+      model: header?.config?.model ?? projectedSelection(summary)?.model ?? this.defaultModel,
       status,
       cwd: directory,
       workspaceId: workspace?.id ?? this.workspaceForCwd(directory).id,
@@ -611,6 +617,22 @@ export function workspaceStatus(statuses: readonly AgentStatus[]): WorkspaceStat
 }
 
 /**
+ * Model selection a cold listing already carries.
+ *
+ * The session controller projects the durable selection and the list service
+ * ships that projection as a hint, so a session with nothing attached still
+ * reports the provider and model it last ran.
+ */
+function projectedSelection(summary: SessionSummaryLike): { provider?: string; model?: string } | undefined {
+  const value = summary.projections?.values?.['modelSelection']
+  if (value === null || typeof value !== 'object') return undefined
+  const projection = value as { readonly next?: unknown; readonly lastUsed?: unknown }
+  const selection = projection.next ?? projection.lastUsed
+  if (selection === null || typeof selection !== 'object') return undefined
+  return selection as { provider?: string; model?: string }
+}
+
+/**
  * Title a cold listing already carries.
  *
  * The session-title plugin projects the current title, and the list service
@@ -620,6 +642,30 @@ export function workspaceStatus(statuses: readonly AgentStatus[]): WorkspaceStat
 function projectedTitle(summary: SessionSummaryLike): string | null {
   const title = summary.projections?.values?.['title']
   return typeof title === 'string' && title.length > 0 ? title : null
+}
+
+/**
+ * Turn one submitted prompt into session content parts.
+ *
+ * The text part is omitted when a client sent only images, and an image whose
+ * media type the attachment seam does not accept is dropped rather than
+ * failing the whole prompt.
+ * @param prompt - submitted prompt.
+ * @returns the content parts to admit.
+ */
+export function promptParts(prompt: PromptInput): PromptPart[] {
+  const parts: PromptPart[] = []
+  if (prompt.text.trim().length > 0) parts.push({ type: 'text', text: prompt.text })
+  for (const image of prompt.images ?? []) {
+    if (!isImageMediaType(image.mimeType)) continue
+    parts.push({ type: 'image', mediaType: image.mimeType, data: image.data })
+  }
+  return parts
+}
+
+/** Whether the attachment seam accepts this media type. */
+export function isImageMediaType(value: string): value is ImageMediaType {
+  return value === 'image/png' || value === 'image/jpeg' || value === 'image/webp' || value === 'image/gif'
 }
 
 function titleFrom(text: string | undefined): string | undefined {

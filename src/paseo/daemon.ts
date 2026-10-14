@@ -225,7 +225,11 @@ export class PaseoDaemon {
             reply(sendMessageRejected(requestId, agentId, 'agent not found'))
             return
           }
-          await this.options.bridge.sendPrompt(agent.id, text, stringField(message, 'messageId'))
+          await this.options.bridge.sendPrompt(agent.id, {
+            text,
+            ...(stringField(message, 'messageId') === undefined ? {} : { clientMessageId: stringField(message, 'messageId') }),
+            ...(imagesOf(message) === undefined ? {} : { images: imagesOf(message) }),
+          })
           const updated = (await this.options.bridge.getAgent(agent.id)) ?? agent
           reply(sendMessageResponse(requestId, updated))
           return
@@ -296,6 +300,7 @@ export class PaseoDaemon {
               ...(model === undefined ? {} : { model }),
               ...(config === undefined || typeof config.title !== 'string' ? {} : { title: config.title }),
               ...(typeof message.initialPrompt === 'string' ? { prompt: message.initialPrompt } : {}),
+              ...(imagesOf(message) === undefined ? {} : { images: imagesOf(message) }),
             })
             reply(legacy ? agentCreatedStatus(requestId, agent) : agentCreateResponse(requestId, agent, null))
           } catch (error) {
@@ -547,4 +552,18 @@ export function isAgentRecord(value: unknown): value is AgentRecord {
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
+}
+
+/** Images a client attached to one request, or undefined when it attached none. */
+function imagesOf(message: Record<string, unknown>): readonly { readonly data: string; readonly mimeType: string }[] | undefined {
+  const raw = message.images
+  if (!Array.isArray(raw)) return undefined
+  const images = raw.flatMap((entry) => {
+    if (entry === null || typeof entry !== 'object') return []
+    const record = entry as Record<string, unknown>
+    const data = record.data
+    const mimeType = record.mimeType
+    return typeof data === 'string' && typeof mimeType === 'string' ? [{ data, mimeType }] : []
+  })
+  return images.length === 0 ? undefined : images
 }

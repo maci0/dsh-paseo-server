@@ -53,7 +53,7 @@ function agent(overrides: Partial<AgentRecord> = {}): AgentRecord {
 /** Bridge whose state the test controls directly. */
 function fakeBridge() {
   const listeners = new Set<(event: BridgeEvent) => void>()
-  const prompts: Array<{ agentId: string; text: string }> = []
+  const prompts: Array<{ agentId: string; text: string; images: readonly { data: string; mimeType: string }[] }> = []
   const created: Array<Record<string, unknown>> = []
   const state = { agents: [agent()] }
   const bridge: PaseoBridge = {
@@ -65,7 +65,7 @@ function fakeBridge() {
     async listAgents() { return state.agents },
     async getAgent(id) { return state.agents.find((item) => item.id === id) ?? null },
     async getTimeline() { return [{ item: { type: 'user_message', text: 'hi' }, timestamp: now, seq: 1 }] },
-    async sendPrompt(agentId, text) { prompts.push({ agentId, text }) },
+    async sendPrompt(agentId, prompt) { prompts.push({ agentId, text: prompt.text, images: prompt.images ?? [] }) },
     async createAgent(input) { created.push(input); return agent({ id: 'ses_new', workspaceId: 'ws_1' }) },
     async cancelAgent() {},
     async archiveAgent() { return new Date().toISOString() },
@@ -172,7 +172,7 @@ test('send_agent_message_request reaches the bridge and is acknowledged', async 
   client.hello()
   client.request({ type: 'send_agent_message_request', requestId: 'r1', agentId: 'ses_1', text: 'do it' })
   await client.settle()
-  assert.deepEqual(prompts, [{ agentId: 'ses_1', text: 'do it' }])
+  assert.deepEqual(prompts, [{ agentId: 'ses_1', text: 'do it', images: [] }])
   const payload = client.last().payload as Record<string, unknown>
   assert.equal(payload.accepted, true)
   assert.equal(payload.error, null)

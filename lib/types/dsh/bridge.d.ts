@@ -9,8 +9,8 @@
  *
  * @module dsh-paseo-server/dsh/bridge
  */
-import type { AgentStatus, PaseoBridge, TimelineEntry, WorkspaceStatus } from '../bridge.ts';
-import type { HostContext, SessionEventLike } from '../host.ts';
+import type { AgentStatus, PromptInput, PaseoBridge, TimelineEntry, WorkspaceStatus } from '../bridge.ts';
+import type { HostContext, SessionEventLike, PromptPart, ImageMediaType } from '../host.ts';
 /** Options for {@link createDshBridge}. */
 export interface DshBridgeOptions {
     readonly ctx: HostContext;
@@ -44,3 +44,15 @@ export declare function messageText(message: Record<string, unknown>): string | 
 export declare function messageReasoning(message: Record<string, unknown>): string | undefined;
 /** Workspace status bucket from the statuses of its agents, most severe first. */
 export declare function workspaceStatus(statuses: readonly AgentStatus[]): WorkspaceStatus;
+/**
+ * Turn one submitted prompt into session content parts.
+ *
+ * The text part is omitted when a client sent only images, and an image whose
+ * media type the attachment seam does not accept is dropped rather than
+ * failing the whole prompt.
+ * @param prompt - submitted prompt.
+ * @returns the content parts to admit.
+ */
+export declare function promptParts(prompt: PromptInput): PromptPart[];
+/** Whether the attachment seam accepts this media type. */
+export declare function isImageMediaType(value: string): value is ImageMediaType;

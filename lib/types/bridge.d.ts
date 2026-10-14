@@ -95,6 +95,17 @@ export interface TimelineEntry {
     /** Turn the row belongs to, when the runtime reports one. */
     readonly turnId?: string;
 }
+/** One prompt a client submitted: text, images, or both. */
+export interface PromptInput {
+    readonly text: string;
+    /** Client-minted identity of the submission, echoed back on its timeline row. */
+    readonly clientMessageId?: string;
+    /** Base64 encoded images, in the order the client attached them. */
+    readonly images?: readonly {
+        readonly data: string;
+        readonly mimeType: string;
+    }[];
+}
 /** Events the bridge pushes toward connected Paseo clients. */
 export type BridgeEvent = {
     readonly kind: 'agent_upsert';
@@ -138,7 +149,7 @@ export interface PaseoBridge {
         readonly limit?: number;
     }): Promise<readonly TimelineEntry[]>;
     /** Deliver a user prompt to one agent, starting a turn when idle. */
-    sendPrompt(agentId: string, text: string, clientMessageId?: string): Promise<void>;
+    sendPrompt(agentId: string, prompt: PromptInput): Promise<void>;
     /** Create an agent in a workspace and return it. */
     createAgent(input: {
         /** Existing workspace to place the agent in; resolved to its directory. */
@@ -153,6 +164,11 @@ export interface PaseoBridge {
         readonly title?: string;
         /** Initial prompt, delivered as the agent's first turn. */
         readonly prompt?: string;
+        /** Images attached to that first prompt. */
+        readonly images?: readonly {
+            readonly data: string;
+            readonly mimeType: string;
+        }[];
     }): Promise<AgentRecord>;
     /** Archive an agent, removing it from the active list. Resolves the archive instant. */
     archiveAgent(agentId: string): Promise<string>;

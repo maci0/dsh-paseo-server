@@ -26,7 +26,14 @@ export interface HostLogger {
 export type PromptPart = {
     readonly type: 'text';
     readonly text: string;
+} | {
+    readonly type: 'image';
+    readonly mediaType: ImageMediaType;
+    readonly data: string;
+    readonly name?: string;
 };
+/** Image encodings the attachment seam accepts; anything else is refused at admission. */
+export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
 /** One row of `sessionController.list()`. */
 export interface SessionSummaryLike {
     readonly sessionId: string;
