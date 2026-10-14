@@ -12,7 +12,7 @@ import type { PaseoDaemon } from './daemon.ts';
  * @param daemon - protocol state machine.
  * @param socket - upgraded socket.
  */
-export declare function serveWebSocket(daemon: PaseoDaemon, socket: WebSocket): void;
+export declare function serveWebSocket(daemon: PaseoDaemon, socket: WebSocket, host?: string): void;
 /**
  * Complete an HTTP upgrade as a Paseo client connection.
  * @param daemon - protocol state machine.

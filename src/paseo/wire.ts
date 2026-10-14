@@ -8,8 +8,10 @@
  * @module dsh-paseo-server/paseo/wire
  */
 
-import type { PullRequestLookup } from '../dsh/forge.ts'
-import type { DiffFile, GitStatus } from '../dsh/git.ts'
+import { PROXY_PREFIX } from './script-proxy.ts'
+import type { DirectoryEntry, FileContent } from '../dsh/files.ts'
+import type { CheckDetails, ForgeWriteResult, PullRequestLookup, PullRequestTimelineItem } from '../dsh/forge.ts'
+import type { BranchEntry, CommitEntry, DiffFile, GitStatus, StashEntry } from '../dsh/git.ts'
 import type {
   AgentRecord,
   AgentStatus,
@@ -85,6 +87,37 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'schedule/logs',
   'checkout_status_request',
   'checkout_pr_status_request',
+  'archive_workspace_request',
+  'project.add.request',
+  'project.remove.request',
+  'directory_suggestions_request',
+  'read_project_config_request',
+  'write_project_config_request',
+  'workspace.pin.set.request',
+  'workspace.title.set.request',
+  'workspace.clear_attention.request',
+  'file_explorer_request',
+  'list_available_editors_request',
+  'open_in_editor_request',
+  'branch_suggestions_request',
+  'validate_branch_request',
+  'checkout_switch_branch_request',
+  'checkout.rename_branch.request',
+  'checkout.discard_changes.request',
+  'stash_save_request',
+  'stash_pop_request',
+  'stash_list_request',
+  'checkout_merge_request',
+  'checkout_merge_from_base_request',
+  'checkout.commits.list.request',
+  'checkout.commits.file_diff.request',
+  'checkout_pr_create_request',
+  'checkout_pr_merge_request',
+  'checkout.forge.set_auto_merge.request',
+  'checkout.github.set_auto_merge.request',
+  'pull_request_timeline_request',
+  'checkout.forge.get_check_details.request',
+  'checkout.github.get_check_details.request',
   'checkout_commit_request',
   'checkout_push_request',
   'checkout_pull_request',
@@ -633,26 +666,31 @@ export function checkoutStatusResponse(requestId: string, directory: string, sta
   }
 }
 
+/** One changed file in the client's shape. */
+function diffFileWire(file: DiffFile): Record<string, unknown> {
+  return {
+    path: file.path,
+    ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+    isNew: file.isNew,
+    isDeleted: file.isDeleted,
+    additions: file.additions,
+    deletions: file.deletions,
+    hunks: file.hunks.map((hunk) => ({
+      oldStart: hunk.oldStart,
+      oldCount: hunk.oldCount,
+      newStart: hunk.newStart,
+      newCount: hunk.newCount,
+      lines: hunk.lines.map((line) => ({ type: line.type, content: line.content })),
+    })),
+    ...(file.status === undefined ? {} : { status: file.status }),
+  }
+}
+
 /** Shared body of every checkout-diff frame. */
 function diffPayload(directory: string, files: readonly DiffFile[]): Record<string, unknown> {
   return {
     cwd: directory,
-    files: files.map((file) => ({
-      path: file.path,
-      ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
-      isNew: file.isNew,
-      isDeleted: file.isDeleted,
-      additions: file.additions,
-      deletions: file.deletions,
-      hunks: file.hunks.map((hunk) => ({
-        oldStart: hunk.oldStart,
-        oldCount: hunk.oldCount,
-        newStart: hunk.newStart,
-        newCount: hunk.newCount,
-        lines: hunk.lines.map((line) => ({ type: line.type, content: line.content })),
-      })),
-      ...(file.status === undefined ? {} : { status: file.status }),
-    })),
+    files: files.map(diffFileWire),
     error: null,
   }
 }
@@ -822,17 +860,26 @@ export function attentionCleared(requestId: string): Record<string, unknown> {
 /** Statuses whose agents the client shows as needing attention. */
 export const ATTENTION_STATUSES: readonly AgentStatus[] = ['idle', 'error']
 
-/** One workspace script in the client's shape. */
-export function workspaceScript(record: WorkspaceScriptRecord): Record<string, unknown> {
+/**
+ * One workspace script in the client's shape.
+ * @param record - the script and its lifecycle.
+ * @param proxyBase - base a client can reach this daemon on, for the local proxy URL.
+ */
+export function workspaceScript(record: WorkspaceScriptRecord, proxyBase?: string): Record<string, unknown> {
+  const proxyUrl = proxyBase === undefined || record.port === null || record.lifecycle !== 'running'
+    ? null
+    : `${proxyBase}${PROXY_PREFIX}/${record.workspaceId}/${encodeURIComponent(record.name)}`
   return {
     scriptName: record.name,
     type: record.type,
     // A script runs inside this machine's shell; the daemon itself is the host.
     hostname: 'localhost',
     port: record.port,
-    localProxyUrl: null,
+    localProxyUrl: proxyUrl,
+    // No tunnel is published, so the same URL is only reachable where the
+    // daemon is, which is what the local field means.
     publicProxyUrl: null,
-    proxyUrl: null,
+    proxyUrl,
     lifecycle: record.lifecycle,
     health: record.health,
     exitCode: record.exitCode,
@@ -848,6 +895,7 @@ export function workspaceScriptResponse(
   scripts: readonly WorkspaceScriptRecord[],
   error: string | null = null,
   scriptName?: string,
+  proxyBase?: string,
 ): Record<string, unknown> {
   return {
     type,
@@ -855,15 +903,22 @@ export function workspaceScriptResponse(
       requestId,
       workspaceId,
       ...(scriptName === undefined ? {} : { scriptName }),
-      scripts: scripts.map(workspaceScript),
+      scripts: scripts.map((record) => workspaceScript(record, proxyBase)),
       error,
     },
   }
 }
 
 /** `script_status_update`, which tells clients to re-list a workspace's scripts. */
-export function scriptStatusUpdate(workspaceId: string, scripts: readonly WorkspaceScriptRecord[]): Record<string, unknown> {
-  return { type: 'script_status_update', payload: { workspaceId, scripts: scripts.map(workspaceScript) } }
+export function scriptStatusUpdate(
+  workspaceId: string,
+  scripts: readonly WorkspaceScriptRecord[],
+  proxyBase?: string,
+): Record<string, unknown> {
+  return {
+    type: 'script_status_update',
+    payload: { workspaceId, scripts: scripts.map((record) => workspaceScript(record, proxyBase)) },
+  }
 }
 
 /** `agent_deleted`, the answer to a delete request this daemon archives instead. */
@@ -907,9 +962,27 @@ function scheduleSummary(record: ScheduleRecord): Record<string, unknown> {
     updatedAt: record.createdAt,
     nextRunAt: record.nextRunAt,
     lastRunAt: null,
-    pausedAt: null,
-    expiresAt: null,
-    maxRuns: null,
+    pausedAt: record.pausedAt,
+    expiresAt: record.expiresAt,
+    maxRuns: record.maxRuns,
+  }
+}
+
+/** `schedule/pause/response`. */
+export function schedulePaused(requestId: string, scheduleId: string, error: string | null): Record<string, unknown> {
+  return { type: 'schedule/pause/response', payload: { requestId, scheduleId, error } }
+}
+
+/** `schedule/resume/response`. */
+export function scheduleResumed(
+  requestId: string,
+  scheduleId: string,
+  schedule: ScheduleRecord | null,
+  error: string | null,
+): Record<string, unknown> {
+  return {
+    type: 'schedule/resume/response',
+    payload: { requestId, scheduleId, schedule: schedule === null ? null : scheduleSummary(schedule), error },
   }
 }
 
@@ -952,4 +1025,334 @@ export function checkoutPrStatusResponse(
       requestId,
     },
   }
+}
+
+/** `checkout_pr_create_response`. */
+export function pullRequestCreated(requestId: string, directory: string, result: ForgeWriteResult): Record<string, unknown> {
+  return {
+    type: 'checkout_pr_create_response',
+    payload: {
+      cwd: directory,
+      url: result.url,
+      number: result.number,
+      error: result.error === null ? null : { code: 'UNKNOWN', message: result.error },
+      requestId,
+    },
+  }
+}
+
+/** `checkout_pr_merge_response` and its auto-merge sibling. */
+export function pullRequestWriteResponse(
+  type:
+    | 'checkout_pr_merge_response'
+    | 'checkout.forge.set_auto_merge.response'
+    | 'checkout.github.set_auto_merge.response',
+  requestId: string,
+  directory: string,
+  result: ForgeWriteResult,
+  enabled?: boolean,
+): Record<string, unknown> {
+  return {
+    type,
+    payload: {
+      cwd: directory,
+      ...(enabled === undefined ? {} : { enabled }),
+      success: result.success,
+      error: result.error === null ? null : { code: 'UNKNOWN', message: result.error },
+      requestId,
+    },
+  }
+}
+
+/** `pull_request_timeline_response`. */
+export function pullRequestTimelineResponse(
+  requestId: string,
+  directory: string,
+  number: number | null,
+  items: readonly PullRequestTimelineItem[],
+  error: string | null,
+): Record<string, unknown> {
+  return {
+    type: 'pull_request_timeline_response',
+    payload: {
+      cwd: directory,
+      prNumber: number,
+      items: items.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        author: item.author,
+        body: item.body,
+        createdAt: item.createdAt,
+        url: item.url,
+        ...(item.reviewState === undefined ? {} : { reviewState: item.reviewState }),
+      })),
+      truncated: false,
+      error: error === null ? null : { kind: 'unknown', message: error },
+      requestId,
+      githubFeaturesEnabled: error === null,
+      authState: error === null ? 'authenticated' : 'unauthenticated',
+    },
+  }
+}
+
+/** `checkout.forge.get_check_details.response` and its GitHub sibling. */
+export function checkDetailsResponse(
+  type: 'checkout.forge.get_check_details.response' | 'checkout.github.get_check_details.response',
+  requestId: string,
+  directory: string,
+  details: CheckDetails | null,
+  error: string | null,
+): Record<string, unknown> {
+  return {
+    type,
+    payload: {
+      cwd: directory,
+      success: details !== null,
+      details,
+      error: error === null ? null : { code: 'UNKNOWN', message: error },
+      requestId,
+    },
+  }
+}
+
+/** `branch_suggestions_response`. */
+export function branchSuggestions(
+  requestId: string,
+  branches: readonly BranchEntry[],
+  error: string | null = null,
+): Record<string, unknown> {
+  return {
+    type: 'branch_suggestions_response',
+    payload: {
+      branches: branches.map((branch) => branch.name),
+      branchDetails: branches.map((branch) => ({
+        name: branch.name,
+        committerDate: branch.committerDate,
+        hasLocal: branch.hasLocal,
+        hasRemote: branch.hasRemote,
+      })),
+      error,
+      requestId,
+    },
+  }
+}
+
+/** `validate_branch_response`. */
+export function branchValidated(
+  requestId: string,
+  result: { readonly exists: boolean; readonly resolvedRef: string | null; readonly isRemote: boolean },
+): Record<string, unknown> {
+  return {
+    type: 'validate_branch_response',
+    payload: { requestId, exists: result.exists, resolvedRef: result.resolvedRef, isRemote: result.isRemote, error: null },
+  }
+}
+
+/** `stash_list_response`. */
+export function stashEntries(requestId: string, directory: string, entries: readonly StashEntry[]): Record<string, unknown> {
+  return { type: 'stash_list_response', payload: { cwd: directory, entries: [...entries], error: null, requestId } }
+}
+
+/** `checkout.commits.list.response`. */
+export function commitList(
+  requestId: string,
+  directory: string,
+  commits: readonly CommitEntry[],
+  baseRef: string | null = null,
+): Record<string, unknown> {
+  return {
+    type: 'checkout.commits.list.response',
+    payload: { cwd: directory, baseRef, commits: commits.map((commit) => ({ ...commit, isOnBase: false })), error: null, requestId },
+  }
+}
+
+/** `checkout.commits.file_diff.response`, carrying the same parsed files as a working diff. */
+export function commitDiff(requestId: string, directory: string, sha: string, path: string, files: readonly DiffFile[]): Record<string, unknown> {
+  return {
+    type: 'checkout.commits.file_diff.response',
+    payload: { cwd: directory, sha, path, files: files.map(diffFileWire), error: null, requestId },
+  }
+}
+
+/** `file_explorer_response` for a directory listing. */
+export function directoryListing(
+  requestId: string,
+  directory: string,
+  path: string,
+  entries: readonly DirectoryEntry[],
+): Record<string, unknown> {
+  return {
+    type: 'file_explorer_response',
+    payload: {
+      cwd: directory,
+      path,
+      mode: 'list',
+      directory: { path, entries: entries.map((entry) => ({ ...entry })) },
+      file: null,
+      error: null,
+      requestId,
+    },
+  }
+}
+
+/** `file_explorer_response` for one file. */
+export function fileContents(
+  requestId: string,
+  directory: string,
+  path: string,
+  file: FileContent | null,
+  error: string | null,
+): Record<string, unknown> {
+  return {
+    type: 'file_explorer_response',
+    payload: { cwd: directory, path, mode: 'file', directory: null, file, error, requestId },
+  }
+}
+
+/** `list_available_editors_response`, which names the editors a client may open in. */
+export function availableEditors(requestId: string, editors: readonly { id: string; label: string }[]): Record<string, unknown> {
+  return { type: 'list_available_editors_response', payload: { requestId, editors: [...editors], error: null } }
+}
+
+/** `open_in_editor_response`. */
+export function openedInEditor(requestId: string, error: string | null): Record<string, unknown> {
+  return { type: 'open_in_editor_response', payload: { requestId, error } }
+}
+
+/** `archive_workspace_response`. */
+export function workspaceArchived(requestId: string, workspaceId: string, success: boolean): Record<string, unknown> {
+  return { type: 'archive_workspace_response', payload: { requestId, workspaceId, success, error: null } }
+}
+
+/** `workspace.pin.set.response`. */
+export function workspacePinned(
+  requestId: string,
+  workspaceId: string,
+  accepted: boolean,
+  pinnedAt: string | null,
+  error: string | null,
+): Record<string, unknown> {
+  return { type: 'workspace.pin.set.response', payload: { requestId, workspaceId, accepted, pinnedAt, error } }
+}
+
+/** `workspace.title.set.response`, which reports that this daemon cannot retitle. */
+export function workspaceTitleSet(
+  requestId: string,
+  workspaceId: string,
+  accepted: boolean,
+  title: string | null,
+  error: string | null,
+): Record<string, unknown> {
+  return { type: 'workspace.title.set.response', payload: { requestId, workspaceId, accepted, title, error } }
+}
+
+/** `workspace.clear_attention.response`. */
+export function attentionClearedFor(
+  requestId: string,
+  workspaceIds: readonly string[],
+  clearedAgentIds: readonly string[],
+): Record<string, unknown> {
+  const results = workspaceIds.map((workspaceId) => ({ workspaceId, clearedAgentIds: [...clearedAgentIds], success: true, error: null }))
+  return {
+    type: 'workspace.clear_attention.response',
+    payload: {
+      requestId,
+      workspaceId: workspaceIds.length === 1 ? workspaceIds[0] ?? '' : [...workspaceIds],
+      clearedAgentIds: [...clearedAgentIds],
+      results,
+      error: null,
+    },
+  }
+}
+
+/** `workspace.mark_unread.response`. */
+export function workspaceMarkedUnread(
+  requestId: string,
+  workspaceId: string,
+  markedAgentId: string | null,
+  success: boolean,
+  error: string | null,
+): Record<string, unknown> {
+  return { type: 'workspace.mark_unread.response', payload: { requestId, workspaceId, markedAgentId, success, error } }
+}
+
+/** `project.add.response`. */
+export function projectAdded(requestId: string, workspace: WorkspaceRecord | null, error: string | null): Record<string, unknown> {
+  return {
+    type: 'project.add.response',
+    payload: {
+      requestId,
+      project: workspace === null ? null : placement(workspace),
+      error,
+      errorCode: workspace === null && error !== null ? 'directory_not_found' : null,
+    },
+  }
+}
+
+/** `project.remove.response`. */
+export function projectRemoved(
+  requestId: string,
+  projectId: string,
+  workspaceIds: readonly string[],
+  error: string | null,
+): Record<string, unknown> {
+  return {
+    type: 'project.remove.response',
+    payload: { requestId, projectId, accepted: error === null, removedWorkspaceIds: [...workspaceIds], error },
+  }
+}
+
+/** `directory_suggestions_response`. */
+export function directorySuggestions(
+  requestId: string,
+  entries: readonly { readonly path: string; readonly kind: 'file' | 'directory' }[],
+  includeFiles: boolean,
+): Record<string, unknown> {
+  const directories = entries.filter((entry) => entry.kind === 'directory').map((entry) => entry.path)
+  return {
+    type: 'directory_suggestions_response',
+    payload: {
+      directories,
+      entries: includeFiles ? entries.map((entry) => ({ path: entry.path, kind: entry.kind })) : [],
+      error: null,
+      requestId,
+    },
+  }
+}
+
+/** `read_project_config_response`. */
+export function projectConfigRead(
+  requestId: string,
+  repoRoot: string,
+  config: unknown,
+  revision: { readonly mtimeMs: number; readonly size: number } | null,
+): Record<string, unknown> {
+  return { type: 'read_project_config_response', payload: { requestId, repoRoot, ok: true, config, revision } }
+}
+
+/** `read_project_config_response` for a directory this daemon does not serve. */
+export function projectConfigMissing(requestId: string, repoRoot: string, code: 'project_not_found' | 'invalid_project_config' | 'write_failed'): Record<string, unknown> {
+  return { type: 'read_project_config_response', payload: { requestId, repoRoot, ok: false, error: { code } } }
+}
+
+/** `write_project_config_response`. */
+export function projectConfigWritten(
+  requestId: string,
+  repoRoot: string,
+  config: unknown,
+  revision: { readonly mtimeMs: number; readonly size: number },
+): Record<string, unknown> {
+  return {
+    type: 'write_project_config_response',
+    payload: { requestId, repoRoot, ok: true, config, revision },
+  }
+}
+
+/** `write_project_config_response` failure. */
+export function projectConfigWriteFailed(
+  requestId: string,
+  repoRoot: string,
+  code: 'project_not_found' | 'invalid_project_config' | 'stale_project_config' | 'write_failed',
+): Record<string, unknown> {
+  return { type: 'write_project_config_response', payload: { requestId, repoRoot, ok: false, error: { code } } }
 }

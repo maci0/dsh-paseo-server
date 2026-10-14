@@ -16,7 +16,7 @@ import type { WireSocket } from './transport.ts'
  * @param daemon - protocol state machine.
  * @param socket - upgraded socket.
  */
-export function serveWebSocket(daemon: PaseoDaemon, socket: WebSocket): void {
+export function serveWebSocket(daemon: PaseoDaemon, socket: WebSocket, host?: string): void {
   const wire: WireSocket = {
     send: (text) => {
       if (socket.readyState === WsWebSocket.OPEN) socket.send(text)
@@ -27,7 +27,9 @@ export function serveWebSocket(daemon: PaseoDaemon, socket: WebSocket): void {
     close: (code, reason) => { socket.close(code, reason) },
     detach: () => { socket.removeAllListeners() },
   }
-  const connection = daemon.attach(wire)
+  // The request's own Host is the base a client can reach this daemon on, which
+  // is what a workspace script's local proxy URL has to be built from.
+  const connection = daemon.attach(wire, host)
   socket.on('message', (data, isBinary) => {
     if (isBinary) {
       connection.receiveBinary(toBytes(data))
@@ -59,7 +61,8 @@ export function upgradeWebSocket(
   socket: Duplex,
   head: Buffer,
 ): void {
-  server.handleUpgrade(request, socket, head, (ws) => { serveWebSocket(daemon, ws) })
+  const host = request.headers.host
+  server.handleUpgrade(request, socket, head, (ws) => { serveWebSocket(daemon, ws, host) })
 }
 
 /** Narrow a `ws` message payload to bytes. */

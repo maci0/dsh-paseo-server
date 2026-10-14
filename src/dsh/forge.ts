@@ -146,3 +146,260 @@ async function forgeFetch(url: string, token: string): Promise<Response | null> 
     return null
   }
 }
+
+/** Outcome of one forge write. */
+export interface ForgeWriteResult {
+  readonly success: boolean
+  readonly url: string | null
+  readonly number: number | null
+  readonly error: string | null
+}
+
+/** One entry of a pull request's discussion. */
+export interface PullRequestTimelineItem {
+  readonly kind: 'comment' | 'review'
+  readonly id: string
+  readonly author: string
+  readonly body: string
+  readonly createdAt: number
+  readonly url: string
+  readonly reviewState?: 'approved' | 'changes_requested' | 'commented'
+}
+
+/** One check run, with the detail the client shows when a check is opened. */
+export interface CheckDetails {
+  readonly checkRunId: number
+  readonly name: string
+  readonly status: string | null
+  readonly conclusion: string | null
+  readonly url: string | null
+  readonly detailsUrl: string | null
+  readonly output: { readonly title: string | null; readonly summary: string | null; readonly text: string | null } | null
+}
+
+/**
+ * Open a pull request for one branch.
+ * @param remote - repository.
+ * @param token - forge token; a write without one is refused.
+ * @param input - head branch, base branch, title, and body.
+ * @returns the created pull request's url and number.
+ */
+export async function createPullRequest(
+  remote: GithubRemote,
+  token: string | undefined,
+  input: { readonly head: string; readonly base: string; readonly title: string; readonly body: string },
+): Promise<ForgeWriteResult> {
+  if (token === undefined) return refused('no forge token is configured')
+  const response = await forgeSend(`${GITHUB_API}/repos/${remote.owner}/${remote.repo}/pulls`, token, 'POST', {
+    title: input.title,
+    body: input.body,
+    head: input.head,
+    base: input.base,
+  })
+  if (response === null) return refused('the forge did not answer')
+  const body = await response.json() as Record<string, unknown>
+  if (!response.ok) return refused(forgeMessage(body, `the forge answered ${String(response.status)}`))
+  const number = typeof body.number === 'number' ? body.number : null
+  return { success: true, url: typeof body.html_url === 'string' ? body.html_url : null, number, error: null }
+}
+
+/**
+ * Merge one pull request.
+ * @param remote - repository.
+ * @param token - forge token.
+ * @param number - pull request number.
+ * @param method - merge strategy the client asked for.
+ * @returns whether the merge landed.
+ */
+export async function mergePullRequest(
+  remote: GithubRemote,
+  token: string | undefined,
+  number: number,
+  method: 'merge' | 'squash' | 'rebase',
+): Promise<ForgeWriteResult> {
+  if (token === undefined) return refused('no forge token is configured')
+  const response = await forgeSend(
+    `${GITHUB_API}/repos/${remote.owner}/${remote.repo}/pulls/${String(number)}/merge`,
+    token,
+    'PUT',
+    { merge_method: method },
+  )
+  if (response === null) return refused('the forge did not answer')
+  const body = await response.json() as Record<string, unknown>
+  if (!response.ok) return refused(forgeMessage(body, `the forge answered ${String(response.status)}`))
+  return { success: body.merged === true, url: null, number, error: body.merged === true ? null : forgeMessage(body, 'the forge did not merge the pull request') }
+}
+
+/**
+ * Turn auto-merge on or off for one pull request.
+ *
+ * GitHub exposes auto-merge only through GraphQL, so this asks for the pull
+ * request's node id and runs the matching mutation.
+ * @param remote - repository.
+ * @param token - forge token.
+ * @param number - pull request number.
+ * @param enabled - whether auto-merge should be on.
+ * @param method - merge strategy to use when it lands.
+ * @returns whether the change was accepted.
+ */
+export async function setAutoMerge(
+  remote: GithubRemote,
+  token: string | undefined,
+  number: number,
+  enabled: boolean,
+  method: 'merge' | 'squash' | 'rebase',
+): Promise<ForgeWriteResult> {
+  if (token === undefined) return refused('no forge token is configured')
+  const pr = await forgeFetch(`${GITHUB_API}/repos/${remote.owner}/${remote.repo}/pulls/${String(number)}`, token)
+  if (pr === null) return refused('the forge did not answer')
+  const body = await pr.json() as Record<string, unknown>
+  const nodeId = typeof body.node_id === 'string' ? body.node_id : null
+  if (nodeId === null) return refused('the forge returned no pull request identity')
+  const mutation = enabled
+    ? `mutation { enablePullRequestAutoMerge(input: {pullRequestId: "${nodeId}", mergeMethod: ${method.toUpperCase()}}) { clientMutationId } }`
+    : `mutation { disablePullRequestAutoMerge(input: {pullRequestId: "${nodeId}"}) { clientMutationId } }`
+  const response = await forgeSend(`${GITHUB_API}/graphql`, token, 'POST', { query: mutation })
+  if (response === null) return refused('the forge did not answer')
+  const result = await response.json() as { errors?: { message?: string }[] }
+  const failure = result.errors?.[0]?.message
+  return failure === undefined
+    ? { success: true, url: null, number, error: null }
+    : refused(failure)
+}
+
+/**
+ * Read a pull request's discussion.
+ * @param remote - repository.
+ * @param token - forge token.
+ * @param number - pull request number.
+ * @returns the comments and reviews, oldest first.
+ */
+export async function readPullRequestTimeline(
+  remote: GithubRemote,
+  token: string | undefined,
+  number: number,
+): Promise<{ readonly items: readonly PullRequestTimelineItem[]; readonly error: string | null }> {
+  if (token === undefined) return { items: [], error: null }
+  const base = `${GITHUB_API}/repos/${remote.owner}/${remote.repo}`
+  const [comments, reviews] = await Promise.all([
+    forgeFetch(`${base}/issues/${String(number)}/comments?per_page=100`, token),
+    forgeFetch(`${base}/pulls/${String(number)}/reviews?per_page=100`, token),
+  ])
+  if (comments === null || reviews === null) return { items: [], error: 'the forge did not answer' }
+  const commentItems = await itemsOf(comments, 'comment')
+  const reviewItems = await itemsOf(reviews, 'review')
+  const items = [...commentItems, ...reviewItems].sort((left, right) => left.createdAt - right.createdAt)
+  return { items, error: null }
+}
+
+/**
+ * Read one check run.
+ * @param remote - repository.
+ * @param token - forge token.
+ * @param checkRunId - check run to read.
+ * @returns the details, or why they are unavailable.
+ */
+export async function readCheckDetails(
+  remote: GithubRemote,
+  token: string | undefined,
+  checkRunId: number,
+): Promise<{ readonly details: CheckDetails | null; readonly error: string | null }> {
+  if (token === undefined) return { details: null, error: null }
+  const response = await forgeFetch(
+    `${GITHUB_API}/repos/${remote.owner}/${remote.repo}/check-runs/${String(checkRunId)}`,
+    token,
+  )
+  if (response === null) return { details: null, error: 'the forge did not answer' }
+  if (!response.ok) return { details: null, error: `the forge answered ${String(response.status)}` }
+  const body = await response.json() as Record<string, unknown>
+  const output = body.output === null || typeof body.output !== 'object' ? null : body.output as Record<string, unknown>
+  return {
+    details: {
+      checkRunId,
+      name: typeof body.name === 'string' ? body.name : '',
+      status: typeof body.status === 'string' ? body.status : null,
+      conclusion: typeof body.conclusion === 'string' ? body.conclusion : null,
+      url: typeof body.html_url === 'string' ? body.html_url : null,
+      detailsUrl: typeof body.details_url === 'string' ? body.details_url : null,
+      output: output === null
+        ? null
+        : {
+            title: textOf(output.title),
+            summary: textOf(output.summary),
+            text: textOf(output.text),
+          },
+    },
+    error: null,
+  }
+}
+
+/** One page of timeline entries, in the client's shape. */
+async function itemsOf(response: Response, kind: 'comment' | 'review'): Promise<PullRequestTimelineItem[]> {
+  if (!response.ok) return []
+  const body = await response.json() as unknown
+  if (!Array.isArray(body)) return []
+  return body.flatMap((entry) => {
+    if (entry === null || typeof entry !== 'object') return []
+    const record = entry as Record<string, unknown>
+    const user = record.user === null || typeof record.user !== 'object' ? undefined : record.user as Record<string, unknown>
+    const created = typeof record.created_at === 'string' ? Date.parse(record.created_at) : 0
+    const item: PullRequestTimelineItem = {
+      kind,
+      id: typeof record.id === 'number' ? String(record.id) : '',
+      author: typeof user?.login === 'string' ? user.login : 'unknown',
+      body: typeof record.body === 'string' ? record.body : '',
+      createdAt: Number.isFinite(created) ? created : 0,
+      url: typeof record.html_url === 'string' ? record.html_url : '',
+      ...(kind === 'review' ? { reviewState: reviewStateOf(record.state) } : {}),
+    }
+    return [item]
+  })
+}
+
+/** Review state GitHub reports, mapped onto the client's three. */
+function reviewStateOf(state: unknown): 'approved' | 'changes_requested' | 'commented' {
+  if (state === 'APPROVED') return 'approved'
+  if (state === 'CHANGES_REQUESTED') return 'changes_requested'
+  return 'commented'
+}
+
+/** A refused write, with the reason the client shows. */
+function refused(message: string): ForgeWriteResult {
+  return { success: false, url: null, number: null, error: message }
+}
+
+/** The forge's own error text, when it sent one. */
+function forgeMessage(body: Record<string, unknown>, fallback: string): string {
+  const message = body.message
+  return typeof message === 'string' && message.length > 0 ? message : fallback
+}
+
+/** A string field of a JSON object, or null. */
+function textOf(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+/** One write to the forge API. */
+async function forgeSend(
+  url: string,
+  token: string,
+  method: 'POST' | 'PUT',
+  body: Record<string, unknown>,
+): Promise<Response | null> {
+  try {
+    return await fetch(url, {
+      method,
+      signal: AbortSignal.timeout(FORGE_TIMEOUT_MS),
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'user-agent': 'dsh-paseo-server',
+        'x-github-api-version': '2022-11-28',
+      },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    return null
+  }
+}

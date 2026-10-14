@@ -181,6 +181,12 @@ export interface WorkspaceRegistryLike {
   readonly archivedSessionIds?: readonly string[]
   /** Archive one session, which bars it from running a model step until restored. */
   archiveSession?(sessionId: string, options?: Record<string, unknown>): Promise<void>
+  /** Remove one workspace record; its Sessions stay on disk. */
+  delete?(id: string): Promise<boolean>
+  /** Pin one Session to the top of its workspace. */
+  pinSession?(sessionId: string): Promise<void>
+  /** Remove one Session's pin. */
+  unpinSession?(sessionId: string): Promise<void>
 }
 
 /** High-level session API the client protocol is built on. */

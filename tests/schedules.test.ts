@@ -32,7 +32,18 @@ test('an interval shorter than the floor is refused with the reason', () => {
   assert.match(result.error, /60 seconds/)
 })
 
-test('a one-shot reminder has no Paseo cadence', () => {
+test('a one-shot reminder projects onto the cron of its own instant', () => {
+  assert.deepEqual(
+    toPaseoCadence({ kind: 'at', scheduledAt: '2026-10-15T03:20:00.000Z' }),
+    { type: 'cron', expression: '20 3 15 10 *', timezone: 'UTC' },
+  )
+  assert.deepEqual(
+    toPaseoCadence({ kind: 'after', scheduledAt: '2026-12-01T23:05:00.000Z' }),
+    { type: 'cron', expression: '5 23 1 12 *', timezone: 'UTC' },
+  )
+})
+
+test('a one-shot reminder without an instant has no cadence', () => {
   assert.equal(toPaseoCadence({ kind: 'at' }), null)
   assert.equal(toPaseoCadence({ kind: 'after' }), null)
 })

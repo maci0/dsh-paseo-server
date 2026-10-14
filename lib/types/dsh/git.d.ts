@@ -109,3 +109,60 @@ export declare function pushCheckout(directory: string): Promise<GitOperationRes
  * @returns the outcome.
  */
 export declare function pullCheckout(directory: string): Promise<GitOperationResult>;
+/** One branch a client can switch to. */
+export interface BranchEntry {
+    readonly name: string;
+    readonly committerDate: number;
+    readonly hasLocal: boolean;
+    readonly hasRemote: boolean;
+}
+/** One stash entry. */
+export interface StashEntry {
+    readonly index: number;
+    readonly message: string;
+    readonly branch: string | null;
+    /** Whether this daemon created the stash, which its message marks. */
+    readonly isPaseo: boolean;
+}
+/** One commit in the branch's history. */
+export interface CommitEntry {
+    readonly sha: string;
+    readonly shortSha: string;
+    readonly subject: string;
+    readonly authorName: string;
+    readonly authorDate: string;
+    readonly isOnRemote: boolean;
+}
+/** Marker this daemon puts in a stash message, so it can list its own stashes. */
+export declare const STASH_MARKER = "dsh-paseo";
+/** Branch refs a client may switch to, local and remote, newest first. */
+export declare function listBranches(directory: string, query?: string, limit?: number): Promise<readonly BranchEntry[]>;
+/** Whether one branch name resolves, and whether it resolves to a remote ref. */
+export declare function resolveBranch(directory: string, branch: string): Promise<{
+    readonly exists: boolean;
+    readonly resolvedRef: string | null;
+    readonly isRemote: boolean;
+}>;
+/** Switch to one branch, tracking its remote counterpart when only that exists. */
+export declare function switchBranch(directory: string, branch: string): Promise<GitOperationResult>;
+/** Rename the current branch. */
+export declare function renameBranch(directory: string, branch: string): Promise<GitOperationResult>;
+/**
+ * Discard working tree changes for the named paths.
+ *
+ * Tracked paths come back from HEAD; untracked paths under the same names are
+ * removed, which is what discarding them means.
+ */
+export declare function discardChanges(directory: string, paths: readonly string[]): Promise<GitOperationResult>;
+/** Stash the working tree, marking the entry as this daemon's own. */
+export declare function stashSave(directory: string, branch?: string): Promise<GitOperationResult>;
+/** Stashes in the repository, newest first. */
+export declare function stashList(directory: string, paseoOnly: boolean): Promise<readonly StashEntry[]>;
+/** Apply and drop the newest stash. */
+export declare function stashPop(directory: string): Promise<GitOperationResult>;
+/** Recent commits on the current branch, newest first. */
+export declare function listCommits(directory: string, limit?: number): Promise<readonly CommitEntry[]>;
+/** One file's diff inside one commit. */
+export declare function commitFileDiff(directory: string, sha: string, path: string): Promise<readonly DiffFile[]>;
+/** Merge a ref into the current branch. */
+export declare function mergeRef(directory: string, baseRef: string, strategy: 'merge' | 'squash'): Promise<GitOperationResult>;

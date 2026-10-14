@@ -25,6 +25,8 @@ export const MIN_EVERY_SECONDS = 60
 /** Cadence projection of one DSH reminder, or null when it has no Paseo shape. */
 export interface CadenceSource {
   readonly kind: 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron'
+  /** Absolute instant of a one-shot reminder, as RFC 3339 UTC. */
+  readonly scheduledAt?: string
   readonly everySeconds?: number
   readonly expression?: string
   readonly timeZone?: string
@@ -34,8 +36,13 @@ export interface CadenceSource {
 
 /**
  * Project a DSH reminder's recurrence onto a Paseo cadence.
+ *
+ * A one-shot reminder has no recurring cadence, so it projects onto the cron
+ * rule for its exact instant. The caller pairs that with `maxRuns: 1` and an
+ * expiry at the same instant, which is what keeps the client from reading it
+ * as a yearly recurrence.
  * @param source - the reminder's rule fields.
- * @returns the cadence, or null for a one-shot reminder.
+ * @returns the cadence, or null when the rule has no clock shape at all.
  */
 export function toPaseoCadence(source: CadenceSource): PaseoCadence | null {
   switch (source.kind) {
@@ -68,9 +75,23 @@ export function toPaseoCadence(source: CadenceSource): PaseoCadence | null {
         timezone: source.timeZone ?? 'UTC',
       }
     }
+    case 'at':
+    case 'after': {
+      const at = instantParts(source.scheduledAt)
+      if (at === null) return null
+      return { type: 'cron', expression: `${String(at.minute)} ${String(at.hour)} ${String(at.day)} ${String(at.month)} *`, timezone: 'UTC' }
+    }
     default:
       return null
   }
+}
+
+/** Calendar fields one clock instant in a zone names. */
+function instantParts(instant: string | undefined): { hour: number; minute: number; day: number; month: number } | null {
+  if (instant === undefined) return null
+  const match = instant.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
+  if (match === null) return null
+  return { month: Number(match[2]), day: Number(match[3]), hour: Number(match[4]), minute: Number(match[5]) }
 }
 
 /**

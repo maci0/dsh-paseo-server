@@ -8,8 +8,22 @@
  * @module dsh-paseo-server/bridge
  */
 
-import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './dsh/git.ts'
-import type { PullRequestLookup } from './dsh/forge.ts'
+import type { DirectoryEntry, FileContent, PathSuggestion, ProjectConfigFile } from './dsh/files.ts'
+import type {
+  BranchEntry,
+  CommitEntry,
+  DiffCompare,
+  DiffFile,
+  GitOperationResult,
+  GitStatus,
+  StashEntry,
+} from './dsh/git.ts'
+import type {
+  CheckDetails,
+  ForgeWriteResult,
+  PullRequestLookup,
+  PullRequestTimelineItem,
+} from './dsh/forge.ts'
 import type { PaseoCadence } from './dsh/schedules.ts'
 
 /** Disposer returned by every subscription. */
@@ -100,11 +114,19 @@ export interface ScheduleRecord {
   readonly status: 'active' | 'inactive'
   readonly createdAt: string
   readonly nextRunAt: string | null
+  /** Instant the reminder was paused, for a reminder this daemon paused. */
+  readonly pausedAt: string | null
+  /** Fixed end of a one-shot reminder, so the client can show it as a one-off. */
+  readonly expiresAt: string | null
+  /** How many deliveries the reminder allows; one for a one-shot reminder. */
+  readonly maxRuns: number | null
 }
 
 /** One declared workspace script and what it is doing now. */
 export interface WorkspaceScriptRecord {
   readonly name: string
+  /** Workspace the script belongs to, which its proxy URL names. */
+  readonly workspaceId: string
   readonly type: 'script' | 'service'
   readonly command: string
   readonly port: number | null
@@ -197,8 +219,83 @@ export interface PaseoBridge {
   pushCheckout(directory: string): Promise<GitOperationResult>
   /** Fast-forward one workspace directory from its upstream. */
   pullCheckout(directory: string): Promise<GitOperationResult>
+  /** Branch refs a client may switch to. */
+  listBranches(directory: string, query?: string, limit?: number): Promise<readonly BranchEntry[]>
+  /** Whether one branch name resolves. */
+  resolveBranch(
+    directory: string,
+    branch: string,
+  ): Promise<{ readonly exists: boolean; readonly resolvedRef: string | null; readonly isRemote: boolean }>
+  /** Switch one directory to another branch. */
+  switchBranch(directory: string, branch: string): Promise<GitOperationResult>
+  /** Rename the directory's current branch. */
+  renameBranch(directory: string, branch: string): Promise<GitOperationResult>
+  /** Discard working tree changes for the named paths. */
+  discardChanges(directory: string, paths: readonly string[]): Promise<GitOperationResult>
+  /** Stash the directory's working tree. */
+  stashSave(directory: string, branch?: string): Promise<GitOperationResult>
+  /** Stashes in the directory's repository. */
+  stashList(directory: string, paseoOnly: boolean): Promise<readonly StashEntry[]>
+  /** Apply and drop the newest stash. */
+  stashPop(directory: string): Promise<GitOperationResult>
+  /** Recent commits on the directory's current branch. */
+  listCommits(directory: string): Promise<readonly CommitEntry[]>
+  /** One file's diff inside one commit. */
+  commitFileDiff(directory: string, sha: string, path: string): Promise<readonly DiffFile[]>
+  /** Merge a ref into the directory's current branch. */
+  mergeRef(directory: string, baseRef: string, strategy: 'merge' | 'squash'): Promise<GitOperationResult>
+  /** List one workspace directory. */
+  listDirectory(directory: string, path?: string): Promise<readonly DirectoryEntry[] | null>
+  /** Read one file inside a workspace directory. */
+  readWorkspaceFile(directory: string, path: string): Promise<FileContent | null>
+  /** Remove one workspace record; its Sessions and their logs stay. */
+  deleteWorkspace(workspaceId: string): Promise<boolean>
+  /**
+   * Pin or unpin one workspace.
+   *
+   * DSH pins Sessions, not workspaces, so this applies to every Session the
+   * workspace holds and reports the instant when they all became pinned.
+   */
+  setWorkspacePinned(workspaceId: string, pinned: boolean): Promise<string | null>
+  /** Suggest paths for a partially typed path, for the add-project picker. */
+  suggestPaths(query: string, cwd: string, limit: number): Promise<readonly PathSuggestion[]>
+  /** Read one project's `paseo.json`, with the revision a write must match. */
+  readProjectConfig(directory: string): Promise<ProjectConfigFile | null>
+  /** Write one project's `paseo.json` against an expected revision. */
+  writeProjectConfig(
+    directory: string,
+    config: unknown,
+    expected: { readonly mtimeMs: number; readonly size: number } | null,
+  ): Promise<{ readonly revision: { readonly mtimeMs: number; readonly size: number } } | { readonly error: string }>
+  /** Workspace records whose project is one project identity. */
+  workspacesOfProject(projectId: string): Promise<readonly WorkspaceRecord[]>
   /** Pull request facts for the current branch of one workspace directory. */
   checkoutPrStatus(directory: string): Promise<PullRequestLookup>
+  /** Open a pull request for the directory's current branch. */
+  createPullRequest(directory: string, input: {
+    readonly title?: string
+    readonly body?: string
+    readonly baseRef?: string
+  }): Promise<ForgeWriteResult>
+  /** Merge the pull request whose head is the directory's current branch. */
+  mergePullRequest(directory: string, method: 'merge' | 'squash' | 'rebase'): Promise<ForgeWriteResult>
+  /** Turn auto-merge on or off for that pull request. */
+  setPullRequestAutoMerge(
+    directory: string,
+    enabled: boolean,
+    method: 'merge' | 'squash' | 'rebase',
+  ): Promise<ForgeWriteResult>
+  /** Discussion of that pull request. */
+  pullRequestTimeline(directory: string): Promise<{
+    readonly items: readonly PullRequestTimelineItem[]
+    readonly error: string | null
+    readonly number: number | null
+  }>
+  /** One check run's details. */
+  checkDetails(directory: string, checkRunId: number): Promise<{
+    readonly details: CheckDetails | null
+    readonly error: string | null
+  }>
   /** Archive an agent, removing it from the active list. Resolves the archive instant. */
   archiveAgent(agentId: string): Promise<string>
   /** Interrupt one agent's active turn, if any. */
@@ -220,6 +317,10 @@ export interface PaseoBridge {
   }): Promise<ScheduleRecord>
   /** Remove one reminder. */
   deleteSchedule(scheduleId: string): Promise<boolean>
+  /** Stop a reminder without losing it. */
+  pauseSchedule(scheduleId: string): Promise<boolean>
+  /** Start a paused reminder again. */
+  resumeSchedule(scheduleId: string): Promise<ScheduleRecord>
   /** Deliver one reminder's prompt immediately. */
   runScheduleNow(scheduleId: string): Promise<void>
   createTerminal(input: {

@@ -75,6 +75,30 @@ function fakeBridge() {
     async pushCheckout() { return { success: true } },
     async pullCheckout() { return { success: true } },
     async checkoutPrStatus() { return { status: null, authenticated: false, error: null } },
+    async listBranches() { return [] },
+    async resolveBranch() { return { exists: false, resolvedRef: null, isRemote: false } },
+    async switchBranch() { return { success: true } },
+    async renameBranch() { return { success: true } },
+    async discardChanges() { return { success: true } },
+    async stashSave() { return { success: true } },
+    async stashList() { return [] },
+    async stashPop() { return { success: true } },
+    async listCommits() { return [] },
+    async commitFileDiff() { return [] },
+    async mergeRef() { return { success: true } },
+    async listDirectory() { return [] },
+    async readWorkspaceFile() { return null },
+    async deleteWorkspace() { return true },
+    async setWorkspacePinned() { return null },
+    async suggestPaths() { return [] },
+    async readProjectConfig() { return null },
+    async writeProjectConfig() { return { revision: { mtimeMs: 0, size: 0 } } },
+    async workspacesOfProject() { return [] },
+    async createPullRequest() { return { success: true, url: null, number: null, error: null } },
+    async mergePullRequest() { return { success: true, url: null, number: null, error: null } },
+    async setPullRequestAutoMerge() { return { success: true, url: null, number: null, error: null } },
+    async pullRequestTimeline() { return { items: [], error: null, number: null } },
+    async checkDetails() { return { details: null, error: null } },
     async listTerminals() { return [] },
     async createTerminal() { throw new Error('unused') },
     async followTerminal() { return () => {} },
@@ -86,6 +110,8 @@ function fakeBridge() {
     async createSchedule() { throw new Error('unused') },
     async deleteSchedule() { return true },
     async runScheduleNow() {},
+    async pauseSchedule() { return true },
+    async resumeSchedule() { throw new Error('unused') },
     async listWorkspaceScripts() { return [] },
     async startWorkspaceScript() { throw new Error('unused') },
     async stopWorkspaceScript() { throw new Error('unused') },
@@ -584,7 +610,7 @@ test('schedule/create without a target agent is refused with the reason', async 
   assert.match(String(payload.error), /agent target/)
 })
 
-test('schedule/pause says what this daemon can do instead', async () => {
+test('schedule/pause reports the reminder it paused', async () => {
   const { bridge } = fakeBridge()
   const client = connect(makeDaemon(bridge))
   client.hello()
@@ -592,7 +618,34 @@ test('schedule/pause says what this daemon can do instead', async () => {
   await client.settle()
   const payload = client.last().payload as Record<string, unknown>
   assert.equal(client.last().type, 'schedule/pause/response')
-  assert.match(String(payload.error), /delete it instead/)
+  assert.equal(payload.scheduleId, 'sch_1')
+  assert.equal(payload.error, null)
+})
+
+test('schedule/resume answers with the resumed reminder', async () => {
+  const { bridge } = fakeBridge()
+  const resumed = {
+    id: 'sch_1',
+    agentId: 'ses_1',
+    name: 'nightly',
+    prompt: 'check',
+    cadence: { type: 'every' as const, everyMs: 60_000 },
+    status: 'active' as const,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    nextRunAt: '2026-01-01T00:01:00.000Z',
+    pausedAt: null,
+    expiresAt: null,
+    maxRuns: null,
+  }
+  const resuming: PaseoBridge = { ...bridge, resumeSchedule: async () => resumed }
+  const client = connect(makeDaemon(resuming))
+  client.hello()
+  client.request({ type: 'schedule/resume', requestId: 'r1', scheduleId: 'sch_1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'schedule/resume/response')
+  assert.equal((payload.schedule as Record<string, unknown>).id, 'sch_1')
+  assert.equal(payload.error, null)
 })
 
 test('schedule/list answers with the runtime reminders', async () => {

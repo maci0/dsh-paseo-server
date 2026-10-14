@@ -9,9 +9,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createDshBridge, promptParts } from '../src/dsh/bridge.ts'
-import { parseUnifiedDiff } from '../src/dsh/git.ts'
+import { listBranches, parseUnifiedDiff } from '../src/dsh/git.ts'
 import { readWorkspaceScripts } from '../src/dsh/scripts.ts'
 import type { HostContext, SessionEventLike } from '../src/host.ts'
+import { spawnSync } from 'node:child_process'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { scratchDir } from './scratch.ts'
@@ -234,3 +235,43 @@ test('workspace scripts come from paseo.json', async () => {
 test('a workspace without paseo.json declares no scripts', async () => {
   assert.deepEqual(await readWorkspaceScripts(scratchDir('scripts-empty')), [])
 })
+
+test('a symbolic remote HEAD is not a branch', async () => {
+  const directory = scratchDir('branches')
+  const run = (args: readonly string[]): void => { gitRun(directory, args) }
+  run(['init', '-q', '-b', 'main'])
+  run(['config', 'user.email', 'test@example.com'])
+  run(['config', 'user.name', 'Test'])
+  await writeFile(join(directory, 'a.txt'), 'a\n')
+  run(['add', '.'])
+  run(['commit', '-qm', 'first'])
+  run(['update-ref', 'refs/remotes/origin/main', 'HEAD'])
+  run(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'])
+
+  const branches = await listBranches(directory)
+  assert.deepEqual(branches.map((branch) => branch.name), ['main'])
+  assert.equal(branches[0]?.hasLocal, true)
+  assert.equal(branches[0]?.hasRemote, true)
+})
+
+test('a branch that only exists on the remote reports as remote', async () => {
+  const directory = scratchDir('branches-remote')
+  const run = (args: readonly string[]): void => { gitRun(directory, args) }
+  run(['init', '-q', '-b', 'main'])
+  run(['config', 'user.email', 'test@example.com'])
+  run(['config', 'user.name', 'Test'])
+  await writeFile(join(directory, 'a.txt'), 'a\n')
+  run(['add', '.'])
+  run(['commit', '-qm', 'first'])
+  run(['update-ref', 'refs/remotes/origin/feature', 'HEAD'])
+  const branches = await listBranches(directory)
+  const feature = branches.find((branch) => branch.name === 'feature')
+  assert.equal(feature?.hasLocal, false)
+  assert.equal(feature?.hasRemote, true)
+})
+
+/** Run one git command in a test repository, asserting it succeeded. */
+function gitRun(directory: string, args: readonly string[]): void {
+  const result = spawnSync('git', ['-C', directory, ...args], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+}

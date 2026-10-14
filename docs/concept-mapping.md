@@ -76,14 +76,35 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 | terminal requests | Answered with an empty terminal list until the terminal bridge lands; see Still to build. |
 | provider and model catalogs | Served from `ctx.llm`, so the client composer has a model to select. |
 
-## Still to build
+## Forge surface
 
-The harness ships no forge client, so the forge surface is the one place this
-plugin talks to a service of its own. Pull request facts come from GitHub's
-REST API with a token from `GH_TOKEN` or `GITHUB_TOKEN`; without one, or for a
-remote that is not GitHub, the panel stays hidden and the daemon says why.
-Creating, merging, reviewing, and the pull request timeline are not bridged:
-each needs a forge client this plugin does not have.
+The harness ships no forge client, so this plugin talks to GitHub's REST API
+itself, with a token from `GH_TOKEN` or `GITHUB_TOKEN`. Without a token, or for
+a remote that is not GitHub, the panel stays hidden and the daemon says why.
+
+Reading covers the pull request for the current branch, its discussion, and one
+check run's details. Writing covers opening a pull request, merging it with the
+strategy the client asked for, and turning auto-merge on or off through
+GitHub's GraphQL mutation, because auto-merge has no REST endpoint.
+
+## Project and file surfaces
+
+A Paseo project is a directory the client groups workspaces under. Adding one
+creates the workspace record for that directory, removing one removes its
+workspace records, and the picker that chooses the directory lists host paths
+names-only. `paseo.json` is readable and writable through the project config
+requests, with the revision check the client expects, so workspace scripts can
+be edited from the phone.
+
+The file explorer lists a directory or reads one file inside an advertised
+workspace, refusing any path that resolves outside it. Images come back base64
+with their media type, text as UTF-8, and anything with a NUL byte as binary
+with no content. The daemon reports no available editors: it runs headless, and
+offering an editor that cannot open would be a lie.
+
+Workspace titles are fixed at creation here, pins apply to the Sessions a
+workspace holds because DSH pins Sessions rather than workspaces, and the
+unread mark is refused because nothing keeps one.
 
 ## Pull requests
 

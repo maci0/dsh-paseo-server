@@ -56,3 +56,91 @@ export declare function lookupPullRequest(remote: GithubRemote, branch: string, 
 export declare function forgeToken(env?: Record<string, string | undefined>): string | undefined;
 /** Map one GitHub pull request onto the client's facts. */
 export declare function mapPullRequest(value: unknown, remote: GithubRemote): PullRequestStatus | null;
+/** Outcome of one forge write. */
+export interface ForgeWriteResult {
+    readonly success: boolean;
+    readonly url: string | null;
+    readonly number: number | null;
+    readonly error: string | null;
+}
+/** One entry of a pull request's discussion. */
+export interface PullRequestTimelineItem {
+    readonly kind: 'comment' | 'review';
+    readonly id: string;
+    readonly author: string;
+    readonly body: string;
+    readonly createdAt: number;
+    readonly url: string;
+    readonly reviewState?: 'approved' | 'changes_requested' | 'commented';
+}
+/** One check run, with the detail the client shows when a check is opened. */
+export interface CheckDetails {
+    readonly checkRunId: number;
+    readonly name: string;
+    readonly status: string | null;
+    readonly conclusion: string | null;
+    readonly url: string | null;
+    readonly detailsUrl: string | null;
+    readonly output: {
+        readonly title: string | null;
+        readonly summary: string | null;
+        readonly text: string | null;
+    } | null;
+}
+/**
+ * Open a pull request for one branch.
+ * @param remote - repository.
+ * @param token - forge token; a write without one is refused.
+ * @param input - head branch, base branch, title, and body.
+ * @returns the created pull request's url and number.
+ */
+export declare function createPullRequest(remote: GithubRemote, token: string | undefined, input: {
+    readonly head: string;
+    readonly base: string;
+    readonly title: string;
+    readonly body: string;
+}): Promise<ForgeWriteResult>;
+/**
+ * Merge one pull request.
+ * @param remote - repository.
+ * @param token - forge token.
+ * @param number - pull request number.
+ * @param method - merge strategy the client asked for.
+ * @returns whether the merge landed.
+ */
+export declare function mergePullRequest(remote: GithubRemote, token: string | undefined, number: number, method: 'merge' | 'squash' | 'rebase'): Promise<ForgeWriteResult>;
+/**
+ * Turn auto-merge on or off for one pull request.
+ *
+ * GitHub exposes auto-merge only through GraphQL, so this asks for the pull
+ * request's node id and runs the matching mutation.
+ * @param remote - repository.
+ * @param token - forge token.
+ * @param number - pull request number.
+ * @param enabled - whether auto-merge should be on.
+ * @param method - merge strategy to use when it lands.
+ * @returns whether the change was accepted.
+ */
+export declare function setAutoMerge(remote: GithubRemote, token: string | undefined, number: number, enabled: boolean, method: 'merge' | 'squash' | 'rebase'): Promise<ForgeWriteResult>;
+/**
+ * Read a pull request's discussion.
+ * @param remote - repository.
+ * @param token - forge token.
+ * @param number - pull request number.
+ * @returns the comments and reviews, oldest first.
+ */
+export declare function readPullRequestTimeline(remote: GithubRemote, token: string | undefined, number: number): Promise<{
+    readonly items: readonly PullRequestTimelineItem[];
+    readonly error: string | null;
+}>;
+/**
+ * Read one check run.
+ * @param remote - repository.
+ * @param token - forge token.
+ * @param checkRunId - check run to read.
+ * @returns the details, or why they are unavailable.
+ */
+export declare function readCheckDetails(remote: GithubRemote, token: string | undefined, checkRunId: number): Promise<{
+    readonly details: CheckDetails | null;
+    readonly error: string | null;
+}>;

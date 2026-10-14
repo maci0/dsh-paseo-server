@@ -32,7 +32,32 @@ import {
   cancelResponse,
   checkoutDiffGetResponse,
   checkoutDiffUpdate,
+  attentionClearedFor,
+  directorySuggestions,
+  projectAdded,
+  projectConfigMissing,
+  projectConfigRead,
+  projectConfigWriteFailed,
+  projectConfigWritten,
+  projectRemoved,
+  availableEditors,
+  workspaceArchived,
+  workspaceMarkedUnread,
+  workspacePinned,
+  workspaceTitleSet,
+  branchSuggestions,
+  directoryListing,
+  fileContents,
+  openedInEditor,
+  branchValidated,
+  checkDetailsResponse,
+  commitDiff,
+  commitList,
+  stashEntries,
   checkoutPrStatusResponse,
+  pullRequestCreated,
+  pullRequestTimelineResponse,
+  pullRequestWriteResponse,
   checkoutStatusResponse,
   subscribeCheckoutDiffResponse,
   daemonStatus,
@@ -47,7 +72,9 @@ import {
   scheduleCreated,
   scheduleDeleted,
   scheduleList,
+  schedulePaused,
   scheduleRanOnce,
+  scheduleResumed,
   scriptStatusUpdate,
   terminalsResponse,
   workspaceScriptResponse,
@@ -117,6 +144,8 @@ interface Connection {
   readonly slots: Map<number, { readonly terminalId: string; readonly subscriptionId?: string }>
   /** Active terminal streams by terminal id. */
   readonly terminalStreams: Map<string, () => void>
+  /** Base a workspace script's local proxy URL is built from, when the client sent a Host. */
+  readonly proxyBase?: string
 }
 
 /** Live event fan-out plus request dispatch for every connected client. */
@@ -158,11 +187,12 @@ export class PaseoDaemon {
    * @param socket - transport to speak the protocol over.
    * @returns the connection handle for that socket.
    */
-  attach(socket: WireSocket): PaseoConnection {
+  attach(socket: WireSocket, host?: string): PaseoConnection {
     const connection: Connection = {
       socket,
       ready: false,
       closed: false,
+      proxyBase: host === undefined ? undefined : `http://${host}`,
       diffWatches: new Map(),
       slots: new Map(),
       terminalStreams: new Map(),
@@ -457,6 +487,78 @@ export class PaseoDaemon {
           reply(checkoutPrStatusResponse(requestId, known, await this.options.bridge.checkoutPrStatus(known)))
           return
         }
+        case 'checkout_pr_create_request':
+        case 'checkout_pr_merge_request':
+        case 'checkout.forge.set_auto_merge.request':
+        case 'checkout.github.set_auto_merge.request':
+        case 'pull_request_timeline_request':
+        case 'checkout.forge.get_check_details.request':
+        case 'checkout.github.get_check_details.request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(rpcError(requestId, type, 'cwd is required', 'invalid_request'))
+            return
+          }
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          if (type === 'pull_request_timeline_request') {
+            const timeline = await this.options.bridge.pullRequestTimeline(known)
+            reply(pullRequestTimelineResponse(requestId, known, timeline.number, timeline.items, timeline.error))
+            return
+          }
+          if (type === 'checkout.forge.get_check_details.request' || type === 'checkout.github.get_check_details.request') {
+            const checkRunId = message.checkRunId
+            if (typeof checkRunId !== 'number') {
+              reply(rpcError(requestId, type, 'checkRunId is required', 'invalid_request'))
+              return
+            }
+            const details = await this.options.bridge.checkDetails(known, checkRunId)
+            reply(checkDetailsResponse(
+              type === 'checkout.github.get_check_details.request'
+                ? 'checkout.github.get_check_details.response'
+                : 'checkout.forge.get_check_details.response',
+              requestId,
+              known,
+              details.details,
+              details.error,
+            ))
+            return
+          }
+          if (type === 'checkout_pr_create_request') {
+            const result = await this.options.bridge.createPullRequest(known, {
+              ...(stringField(message, 'title') === undefined ? {} : { title: stringField(message, 'title') }),
+              ...(stringField(message, 'body') === undefined ? {} : { body: stringField(message, 'body') }),
+              ...(stringField(message, 'baseRef') === undefined ? {} : { baseRef: stringField(message, 'baseRef') }),
+            })
+            reply(pullRequestCreated(requestId, known, result))
+            return
+          }
+          const method = mergeMethodOf(message.mergeMethod)
+          if (type === 'checkout_pr_merge_request') {
+            reply(pullRequestWriteResponse(
+              'checkout_pr_merge_response',
+              requestId,
+              known,
+              await this.options.bridge.mergePullRequest(known, method),
+            ))
+            return
+          }
+          const enabled = message.enabled === true
+          const result = await this.options.bridge.setPullRequestAutoMerge(known, enabled, method)
+          reply(pullRequestWriteResponse(
+            type === 'checkout.github.set_auto_merge.request'
+              ? 'checkout.github.set_auto_merge.response'
+              : 'checkout.forge.set_auto_merge.response',
+            requestId,
+            known,
+            result,
+            enabled,
+          ))
+          return
+        }
         case 'checkout_status_request': {
           const directory = stringField(message, 'cwd') ?? stringField(message, 'workspaceDirectory')
           if (directory === undefined) {
@@ -500,6 +602,109 @@ export class PaseoDaemon {
           const subscriptionId = stringField(message, 'subscriptionId')
           if (subscriptionId !== undefined) this.stopDiffWatch(connection, subscriptionId)
           return
+        }
+        case 'branch_suggestions_request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(rpcError(requestId, type, 'cwd is required', 'invalid_request'))
+            return
+          }
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          const limit = typeof message.limit === 'number' ? message.limit : 100
+          reply(branchSuggestions(requestId, await this.options.bridge.listBranches(known, stringField(message, 'query'), limit)))
+          return
+        }
+        case 'validate_branch_request': {
+          const directory = stringField(message, 'cwd')
+          const branchName = stringField(message, 'branchName')
+          if (directory === undefined || branchName === undefined) {
+            reply(rpcError(requestId, type, 'cwd and branchName are required', 'invalid_request'))
+            return
+          }
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          reply(branchValidated(requestId, await this.options.bridge.resolveBranch(known, branchName)))
+          return
+        }
+        case 'checkout_switch_branch_request':
+        case 'checkout.rename_branch.request':
+        case 'checkout.discard_changes.request':
+        case 'stash_save_request':
+        case 'stash_pop_request':
+        case 'stash_list_request':
+        case 'checkout_merge_request':
+        case 'checkout_merge_from_base_request':
+        case 'checkout.commits.list.request':
+        case 'checkout.commits.file_diff.request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(rpcError(requestId, type, 'cwd is required', 'invalid_request'))
+            return
+          }
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          const bridge = this.options.bridge
+          switch (type) {
+            case 'checkout_switch_branch_request':
+              reply(checkoutOperationResponse(type, requestId, known, await bridge.switchBranch(known, stringField(message, 'branch') ?? '')))
+              return
+            case 'checkout.rename_branch.request':
+              reply(checkoutOperationResponse(type, requestId, known, await bridge.renameBranch(known, stringField(message, 'branch') ?? '')))
+              return
+            case 'checkout.discard_changes.request': {
+              const paths = Array.isArray(message.paths) ? message.paths.filter((path): path is string => typeof path === 'string') : []
+              reply(checkoutOperationResponse(type, requestId, known, await bridge.discardChanges(known, paths)))
+              return
+            }
+            case 'stash_save_request':
+              reply(checkoutOperationResponse(type, requestId, known, await bridge.stashSave(known, stringField(message, 'branch'))))
+              return
+            case 'stash_pop_request':
+              reply(checkoutOperationResponse(type, requestId, known, await bridge.stashPop(known)))
+              return
+            case 'stash_list_request':
+              reply(stashEntries(requestId, known, await bridge.stashList(known, message.paseoOnly !== false)))
+              return
+            case 'checkout_merge_request':
+              reply(checkoutOperationResponse(
+                type,
+                requestId,
+                known,
+                await bridge.mergeRef(known, stringField(message, 'baseRef') ?? 'main', message.strategy === 'squash' ? 'squash' : 'merge'),
+              ))
+              return
+            case 'checkout_merge_from_base_request':
+              reply(checkoutOperationResponse(
+                type,
+                requestId,
+                known,
+                await bridge.mergeRef(known, stringField(message, 'baseRef') ?? 'main', 'merge'),
+              ))
+              return
+            case 'checkout.commits.list.request':
+              reply(commitList(requestId, known, await bridge.listCommits(known)))
+              return
+            default: {
+              const sha = stringField(message, 'sha')
+              const path = stringField(message, 'path')
+              if (sha === undefined || path === undefined) {
+                reply(rpcError(requestId, type, 'sha and path are required', 'invalid_request'))
+                return
+              }
+              reply(commitDiff(requestId, known, sha, path, await bridge.commitFileDiff(known, sha, path)))
+              return
+            }
+          }
         }
         case 'checkout_commit_request':
         case 'checkout_push_request':
@@ -555,8 +760,10 @@ export class PaseoDaemon {
               await this.options.bridge.stopWorkspaceScript(workspaceId, scriptName)
             }
             const scripts = await this.options.bridge.listWorkspaceScripts(workspaceId)
-            reply(workspaceScriptResponse(responseType, requestId, workspaceId, scripts, null, scriptName))
-            this.broadcast(scriptStatusUpdate(workspaceId, scripts))
+            reply(workspaceScriptResponse(responseType, requestId, workspaceId, scripts, null, scriptName, connection.proxyBase))
+            for (const peer of this.connections) {
+              peer.socket.send(envelope(scriptStatusUpdate(workspaceId, scripts, peer.proxyBase)))
+            }
           } catch (error) {
             reply(workspaceScriptResponse(
               responseType,
@@ -633,16 +840,27 @@ export class PaseoDaemon {
           reply({ type: 'schedule/inspect/response', payload: { requestId, schedule: found, error: null } })
           return
         }
-        case 'schedule/pause':
+        case 'schedule/pause': {
+          const scheduleId = stringField(message, 'scheduleId')
+          if (scheduleId === undefined) {
+            reply(schedulePaused(requestId, '', 'scheduleId is required'))
+            return
+          }
+          const paused = await this.options.bridge.pauseSchedule(scheduleId)
+          reply(schedulePaused(requestId, scheduleId, paused ? null : 'unknown reminder'))
+          return
+        }
         case 'schedule/resume': {
-          // DSH has no paused state: a reminder is active or deleted. Saying so
-          // is better than pretending, so the client can offer the deletion.
-          const scheduleId = stringField(message, 'scheduleId') ?? ''
-          const responseType = type === 'schedule/pause' ? 'schedule/pause/response' : 'schedule/resume/response'
-          reply({
-            type: responseType,
-            payload: { requestId, scheduleId, error: 'this daemon cannot pause a reminder; delete it instead' },
-          })
+          const scheduleId = stringField(message, 'scheduleId')
+          if (scheduleId === undefined) {
+            reply(scheduleResumed(requestId, '', null, 'scheduleId is required'))
+            return
+          }
+          try {
+            reply(scheduleResumed(requestId, scheduleId, await this.options.bridge.resumeSchedule(scheduleId), null))
+          } catch (error) {
+            reply(scheduleResumed(requestId, scheduleId, null, error instanceof Error ? error.message : String(error)))
+          }
           return
         }
         case 'schedule/update': {
@@ -656,6 +874,45 @@ export class PaseoDaemon {
             return
           }
           reply({ type: 'schedule/logs/response', payload: { requestId, scheduleId, runs: [], error: null } })
+          return
+        }
+        case 'file_explorer_request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(rpcError(requestId, type, 'cwd is required', 'invalid_request'))
+            return
+          }
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          const path = stringField(message, 'path') ?? ''
+          if (message.mode === 'file') {
+            if (path.length === 0) {
+              reply(fileContents(requestId, known, path, null, 'path is required to read a file'))
+              return
+            }
+            const file = await this.options.bridge.readWorkspaceFile(known, path)
+            reply(fileContents(requestId, known, path, file, file === null ? 'the file is unreadable or too large' : null))
+            return
+          }
+          const entries = await this.options.bridge.listDirectory(known, path)
+          if (entries === null) {
+            reply(rpcError(requestId, type, `cannot list ${path}`, 'invalid_request'))
+            return
+          }
+          reply(directoryListing(requestId, known, path, entries))
+          return
+        }
+        case 'list_available_editors_request': {
+          // Nothing here launches a desktop editor, and claiming otherwise
+          // would make the client offer an action that cannot work.
+          reply(availableEditors(requestId, []))
+          return
+        }
+        case 'open_in_editor_request': {
+          reply(openedInEditor(requestId, 'this daemon runs headless; it has no editor to open a file in'))
           return
         }
         case 'daemon.get_status.request': {
@@ -777,10 +1034,136 @@ export class PaseoDaemon {
           reply(attentionCleared(requestId))
           return
         }
+        case 'project.add.request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(projectAdded(requestId, null, 'cwd is required'))
+            return
+          }
+          try {
+            reply(projectAdded(requestId, await this.options.bridge.createWorkspace({ directory }), null))
+          } catch (error) {
+            reply(projectAdded(requestId, null, error instanceof Error ? error.message : String(error)))
+          }
+          return
+        }
+        case 'project.remove.request': {
+          const projectId = stringField(message, 'projectId')
+          if (projectId === undefined) {
+            reply(projectRemoved(requestId, '', [], 'projectId is required'))
+            return
+          }
+          const workspaces = await this.options.bridge.workspacesOfProject(projectId)
+          if (workspaces.length === 0) {
+            reply(projectRemoved(requestId, projectId, [], 'no workspace belongs to that project'))
+            return
+          }
+          const removed: string[] = []
+          for (const workspace of workspaces) {
+            if (await this.options.bridge.deleteWorkspace(workspace.id)) removed.push(workspace.id)
+          }
+          reply(projectRemoved(requestId, projectId, removed, null))
+          return
+        }
+        case 'directory_suggestions_request': {
+          const query = stringField(message, 'query') ?? ''
+          const cwd = stringField(message, 'cwd') ?? (await this.defaultDirectory())
+          const limit = typeof message.limit === 'number' ? message.limit : 20
+          const includeFiles = message.includeFiles === true
+          const entries = await this.options.bridge.suggestPaths(query, cwd, limit)
+          reply(directorySuggestions(requestId, includeFiles ? entries : entries.filter((entry) => entry.kind === 'directory'), includeFiles))
+          return
+        }
+        case 'read_project_config_request': {
+          const repoRoot = stringField(message, 'repoRoot')
+          if (repoRoot === undefined) {
+            reply(projectConfigMissing(requestId, '', 'project_not_found'))
+            return
+          }
+          const known = await this.knownDirectory(repoRoot)
+          if (known === null) {
+            reply(projectConfigMissing(requestId, repoRoot, 'project_not_found'))
+            return
+          }
+          const file = await this.options.bridge.readProjectConfig(known)
+          reply(projectConfigRead(requestId, repoRoot, file?.config ?? null, file?.revision ?? null))
+          return
+        }
+        case 'write_project_config_request': {
+          const repoRoot = stringField(message, 'repoRoot')
+          if (repoRoot === undefined) {
+            reply(projectConfigWriteFailed(requestId, '', 'project_not_found'))
+            return
+          }
+          const known = await this.knownDirectory(repoRoot)
+          if (known === null) {
+            reply(projectConfigWriteFailed(requestId, repoRoot, 'project_not_found'))
+            return
+          }
+          const expected = revisionOf(message.expectedRevision)
+          const written = await this.options.bridge.writeProjectConfig(known, message.config, expected)
+          if ('error' in written) {
+            reply(projectConfigWriteFailed(
+              requestId,
+              repoRoot,
+              written.error === 'stale_project_config'
+                ? 'stale_project_config'
+                : written.error === 'invalid_project_config' ? 'invalid_project_config' : 'write_failed',
+            ))
+            return
+          }
+          reply(projectConfigWritten(requestId, repoRoot, message.config, written.revision))
+          return
+        }
+        case 'archive_workspace_request': {
+          const workspaceId = stringField(message, 'workspaceId')
+          if (workspaceId === undefined) {
+            reply(rpcError(requestId, type, 'workspaceId is required', 'invalid_request'))
+            return
+          }
+          const removed = await this.options.bridge.deleteWorkspace(workspaceId)
+          reply(workspaceArchived(requestId, workspaceId, removed))
+          return
+        }
+        case 'workspace.pin.set.request': {
+          const workspaceId = stringField(message, 'workspaceId')
+          if (workspaceId === undefined) {
+            reply(workspacePinned(requestId, '', false, null, 'workspaceId is required'))
+            return
+          }
+          const pinned = message.pinned === true
+          const pinnedAt = await this.options.bridge.setWorkspacePinned(workspaceId, pinned)
+          reply(workspacePinned(
+            requestId,
+            workspaceId,
+            pinned ? pinnedAt !== null : true,
+            pinnedAt,
+            pinned && pinnedAt === null ? 'this daemon cannot pin a workspace' : null,
+          ))
+          return
+        }
+        case 'workspace.title.set.request': {
+          const workspaceId = stringField(message, 'workspaceId') ?? ''
+          // DSH keeps a workspace title as it was created; there is no rename.
+          reply(workspaceTitleSet(requestId, workspaceId, false, null, 'this daemon cannot retitle a workspace'))
+          return
+        }
+        case 'workspace.mark_unread.request': {
+          const workspaceId = stringField(message, 'workspaceId') ?? ''
+          reply(workspaceMarkedUnread(requestId, workspaceId, null, false, 'this daemon keeps no unread mark'))
+          return
+        }
+        case 'workspace.clear_attention.request': {
+          const requested = message.workspaceId
+          const workspaceIds = Array.isArray(requested)
+            ? requested.filter((id): id is string => typeof id === 'string')
+            : typeof requested === 'string' ? [requested] : []
+          reply(attentionClearedFor(requestId, workspaceIds, []))
+          return
+        }
         case 'client_heartbeat':
         case 'subscribe_terminals_request':
         case 'unsubscribe_terminals_request':
-        case 'workspace.mark_unread.request':
           return
         default:
           reply(rpcError(requestId, type, `unsupported request: ${type}`, 'unsupported'))
@@ -926,6 +1309,13 @@ export class PaseoDaemon {
         // that tells the client to re-read status and diff.
         return checkoutOperationResponse(type, requestId, directory, { success: true })
     }
+  }
+
+  /** A directory to resolve a relative suggestion against: the newest workspace. */
+  private async defaultDirectory(): Promise<string> {
+    const workspaces = await this.options.bridge.listWorkspaces()
+    this.cacheWorkspaces(workspaces)
+    return workspaces[0]?.directory ?? process.cwd()
   }
 
   /** Workspace identity for one directory this daemon advertised. */
@@ -1164,4 +1554,18 @@ function paseoCadence(value: unknown): PaseoCadence | null {
     return { type: 'cron', expression, ...(timezone === undefined ? {} : { timezone }) }
   }
   return null
+}
+
+/** Merge strategy a client asked for, defaulting to a merge commit. */
+function mergeMethodOf(value: unknown): 'merge' | 'squash' | 'rebase' {
+  return value === 'squash' || value === 'rebase' ? value : 'merge'
+}
+
+/** Revision a project config write must match, or null when the client sent none. */
+function revisionOf(value: unknown): { readonly mtimeMs: number; readonly size: number } | null {
+  const record = recordValue(value)
+  if (record === undefined) return null
+  return typeof record.mtimeMs === 'number' && typeof record.size === 'number'
+    ? { mtimeMs: record.mtimeMs, size: record.size }
+    : null
 }

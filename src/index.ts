@@ -24,6 +24,7 @@ import { DEFAULT_RELAY_ENDPOINT, startRelayTransport } from './paseo/relay.ts'
 import type { RelayTransport } from './paseo/relay.ts'
 import { upgradeWebSocket } from './paseo/websocket.ts'
 import { DEFAULT_ALLOWED_ORIGINS, originAllowed, rejectUpgrade } from './paseo/origin.ts'
+import { PROXY_PREFIX, forwardScriptRequest, parseProxyPath } from './paseo/script-proxy.ts'
 import type { HostContext, JobsLike, WebServerLike } from './host.ts'
 import type { Volatile } from '@deepseek-ai/cordis'
 
@@ -289,6 +290,31 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
         res.end(svg)
       },
     }), 'paseo-server: pairing QR route')
+
+    // A workspace script's proxy URL points here: the daemon forwards to the
+    // script's own loopback port, because it publishes no tunnel of its own.
+    ctx.effect(() => webServer.register({
+      kind: 'prefix',
+      path: PROXY_PREFIX,
+      handler: async (req, res) => {
+        const target = parseProxyPath(new URL(req.url ?? '/', 'http://localhost').pathname)
+        if (target === null) {
+          sendJson(res, 404, { error: 'proxy path must name a workspace and a script' })
+          return
+        }
+        const scripts = await bridge.listWorkspaceScripts(target.workspaceId).catch(() => null)
+        const script = scripts?.find((entry) => entry.name === target.scriptName && entry.port !== null)
+        if (script === undefined) {
+          sendJson(res, 404, { error: `workspace ${target.workspaceId} declares no proxied script ${target.scriptName}` })
+          return
+        }
+        if (script.lifecycle !== 'running') {
+          sendJson(res, 503, { error: `script ${target.scriptName} is not running` })
+          return
+        }
+        await forwardScriptRequest(req, res, { ...target, port: script.port as number }, target.rest)
+      },
+    }), 'paseo-server: script proxy route')
   } else {
     logger.warn('paseo-server: the webServer service is not mounted; only the relay can reach this daemon')
   }

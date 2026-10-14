@@ -7,8 +7,9 @@
  *
  * @module dsh-paseo-server/paseo/wire
  */
-import type { PullRequestLookup } from '../dsh/forge.ts';
-import type { DiffFile, GitStatus } from '../dsh/git.ts';
+import type { DirectoryEntry, FileContent } from '../dsh/files.ts';
+import type { CheckDetails, ForgeWriteResult, PullRequestLookup, PullRequestTimelineItem } from '../dsh/forge.ts';
+import type { BranchEntry, CommitEntry, DiffFile, GitStatus, StashEntry } from '../dsh/git.ts';
 import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord, ScheduleRecord, WorkspaceScriptRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
 export declare const PASEO_PROTOCOL_VERSION = 1;
@@ -180,12 +181,16 @@ export declare function eventsSubscriptionSet(requestId: string): Record<string,
 export declare function attentionCleared(requestId: string): Record<string, unknown>;
 /** Statuses whose agents the client shows as needing attention. */
 export declare const ATTENTION_STATUSES: readonly AgentStatus[];
-/** One workspace script in the client's shape. */
-export declare function workspaceScript(record: WorkspaceScriptRecord): Record<string, unknown>;
+/**
+ * One workspace script in the client's shape.
+ * @param record - the script and its lifecycle.
+ * @param proxyBase - base a client can reach this daemon on, for the local proxy URL.
+ */
+export declare function workspaceScript(record: WorkspaceScriptRecord, proxyBase?: string): Record<string, unknown>;
 /** One `workspace.script.*` response, which all three requests share. */
-export declare function workspaceScriptResponse(type: 'workspace.script.list.response' | 'workspace.script.start.response' | 'workspace.script.stop.response', requestId: string, workspaceId: string, scripts: readonly WorkspaceScriptRecord[], error?: string | null, scriptName?: string): Record<string, unknown>;
+export declare function workspaceScriptResponse(type: 'workspace.script.list.response' | 'workspace.script.start.response' | 'workspace.script.stop.response', requestId: string, workspaceId: string, scripts: readonly WorkspaceScriptRecord[], error?: string | null, scriptName?: string, proxyBase?: string): Record<string, unknown>;
 /** `script_status_update`, which tells clients to re-list a workspace's scripts. */
-export declare function scriptStatusUpdate(workspaceId: string, scripts: readonly WorkspaceScriptRecord[]): Record<string, unknown>;
+export declare function scriptStatusUpdate(workspaceId: string, scripts: readonly WorkspaceScriptRecord[], proxyBase?: string): Record<string, unknown>;
 /** `agent_deleted`, the answer to a delete request this daemon archives instead. */
 export declare function agentDeleted(agentId: string): Record<string, unknown>;
 /** `schedule/list/response`. */
@@ -196,5 +201,75 @@ export declare function scheduleCreated(requestId: string, schedule: ScheduleRec
 export declare function scheduleDeleted(requestId: string, scheduleId: string, error?: string | null): Record<string, unknown>;
 /** `schedule/run-once/response`. */
 export declare function scheduleRanOnce(requestId: string, scheduleId: string, error?: string | null): Record<string, unknown>;
+/** `schedule/pause/response`. */
+export declare function schedulePaused(requestId: string, scheduleId: string, error: string | null): Record<string, unknown>;
+/** `schedule/resume/response`. */
+export declare function scheduleResumed(requestId: string, scheduleId: string, schedule: ScheduleRecord | null, error: string | null): Record<string, unknown>;
 /** `checkout_pr_status_response`. */
 export declare function checkoutPrStatusResponse(requestId: string, directory: string, lookup: PullRequestLookup): Record<string, unknown>;
+/** `checkout_pr_create_response`. */
+export declare function pullRequestCreated(requestId: string, directory: string, result: ForgeWriteResult): Record<string, unknown>;
+/** `checkout_pr_merge_response` and its auto-merge sibling. */
+export declare function pullRequestWriteResponse(type: 'checkout_pr_merge_response' | 'checkout.forge.set_auto_merge.response' | 'checkout.github.set_auto_merge.response', requestId: string, directory: string, result: ForgeWriteResult, enabled?: boolean): Record<string, unknown>;
+/** `pull_request_timeline_response`. */
+export declare function pullRequestTimelineResponse(requestId: string, directory: string, number: number | null, items: readonly PullRequestTimelineItem[], error: string | null): Record<string, unknown>;
+/** `checkout.forge.get_check_details.response` and its GitHub sibling. */
+export declare function checkDetailsResponse(type: 'checkout.forge.get_check_details.response' | 'checkout.github.get_check_details.response', requestId: string, directory: string, details: CheckDetails | null, error: string | null): Record<string, unknown>;
+/** `branch_suggestions_response`. */
+export declare function branchSuggestions(requestId: string, branches: readonly BranchEntry[], error?: string | null): Record<string, unknown>;
+/** `validate_branch_response`. */
+export declare function branchValidated(requestId: string, result: {
+    readonly exists: boolean;
+    readonly resolvedRef: string | null;
+    readonly isRemote: boolean;
+}): Record<string, unknown>;
+/** `stash_list_response`. */
+export declare function stashEntries(requestId: string, directory: string, entries: readonly StashEntry[]): Record<string, unknown>;
+/** `checkout.commits.list.response`. */
+export declare function commitList(requestId: string, directory: string, commits: readonly CommitEntry[], baseRef?: string | null): Record<string, unknown>;
+/** `checkout.commits.file_diff.response`, carrying the same parsed files as a working diff. */
+export declare function commitDiff(requestId: string, directory: string, sha: string, path: string, files: readonly DiffFile[]): Record<string, unknown>;
+/** `file_explorer_response` for a directory listing. */
+export declare function directoryListing(requestId: string, directory: string, path: string, entries: readonly DirectoryEntry[]): Record<string, unknown>;
+/** `file_explorer_response` for one file. */
+export declare function fileContents(requestId: string, directory: string, path: string, file: FileContent | null, error: string | null): Record<string, unknown>;
+/** `list_available_editors_response`, which names the editors a client may open in. */
+export declare function availableEditors(requestId: string, editors: readonly {
+    id: string;
+    label: string;
+}[]): Record<string, unknown>;
+/** `open_in_editor_response`. */
+export declare function openedInEditor(requestId: string, error: string | null): Record<string, unknown>;
+/** `archive_workspace_response`. */
+export declare function workspaceArchived(requestId: string, workspaceId: string, success: boolean): Record<string, unknown>;
+/** `workspace.pin.set.response`. */
+export declare function workspacePinned(requestId: string, workspaceId: string, accepted: boolean, pinnedAt: string | null, error: string | null): Record<string, unknown>;
+/** `workspace.title.set.response`, which reports that this daemon cannot retitle. */
+export declare function workspaceTitleSet(requestId: string, workspaceId: string, accepted: boolean, title: string | null, error: string | null): Record<string, unknown>;
+/** `workspace.clear_attention.response`. */
+export declare function attentionClearedFor(requestId: string, workspaceIds: readonly string[], clearedAgentIds: readonly string[]): Record<string, unknown>;
+/** `workspace.mark_unread.response`. */
+export declare function workspaceMarkedUnread(requestId: string, workspaceId: string, markedAgentId: string | null, success: boolean, error: string | null): Record<string, unknown>;
+/** `project.add.response`. */
+export declare function projectAdded(requestId: string, workspace: WorkspaceRecord | null, error: string | null): Record<string, unknown>;
+/** `project.remove.response`. */
+export declare function projectRemoved(requestId: string, projectId: string, workspaceIds: readonly string[], error: string | null): Record<string, unknown>;
+/** `directory_suggestions_response`. */
+export declare function directorySuggestions(requestId: string, entries: readonly {
+    readonly path: string;
+    readonly kind: 'file' | 'directory';
+}[], includeFiles: boolean): Record<string, unknown>;
+/** `read_project_config_response`. */
+export declare function projectConfigRead(requestId: string, repoRoot: string, config: unknown, revision: {
+    readonly mtimeMs: number;
+    readonly size: number;
+} | null): Record<string, unknown>;
+/** `read_project_config_response` for a directory this daemon does not serve. */
+export declare function projectConfigMissing(requestId: string, repoRoot: string, code: 'project_not_found' | 'invalid_project_config' | 'write_failed'): Record<string, unknown>;
+/** `write_project_config_response`. */
+export declare function projectConfigWritten(requestId: string, repoRoot: string, config: unknown, revision: {
+    readonly mtimeMs: number;
+    readonly size: number;
+}): Record<string, unknown>;
+/** `write_project_config_response` failure. */
+export declare function projectConfigWriteFailed(requestId: string, repoRoot: string, code: 'project_not_found' | 'invalid_project_config' | 'stale_project_config' | 'write_failed'): Record<string, unknown>;

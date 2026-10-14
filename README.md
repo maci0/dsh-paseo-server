@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.12.1
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.13.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -98,13 +98,17 @@ Every persisted session is an agent too, not only the ones live in the running
 process. A session the harness is not holding shows as idle, its transcript
 still reads, and prompting it resumes the session and runs the turn.
 
-Not mapped, and named here rather than implied. A one-shot DSH reminder has no
-Paseo cadence and stays out of the schedule listing. Reminder pause and resume
-have no DSH equivalent, and both answer with that reason. Forge work beyond
-reading a pull request (creating, merging, review threads, checks) needs a
-forge client the harness does not ship. A workspace script reports its declared
-port but no proxy URL, because nothing here publishes one. Paseo bookmarks and
-its diff editor are not bridged.
+Not mapped, and named here rather than implied: Paseo's worktree manager, its
+plugin catalog, its cloud execution hub, GitHub repository search, project
+icons and labels, dictation, and its editor bridge. None has a DSH counterpart,
+so each request draws a clear refusal rather than an invented answer.
+
+Where the models disagree, the mapping says so. A one-shot reminder has no
+Paseo cadence and is listed as a cron of its own instant with `maxRuns: 1` and
+an expiry. Pausing removes the reminder and keeps it in a durable store, since
+DSH has no paused state, and resuming recreates it. A workspace pin pins the
+Sessions that workspace holds, because DSH pins Sessions. Pinning and retitling
+a workspace and marking one unread are refused with the reason.
 
 The plugin's own card in the Plugins menu shows the pairing QR and a copy-ready
 offer URL; everything else a client needs comes over the protocol.

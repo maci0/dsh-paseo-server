@@ -55,7 +55,7 @@ export declare class PaseoDaemon {
      * @param socket - transport to speak the protocol over.
      * @returns the connection handle for that socket.
      */
-    attach(socket: WireSocket): PaseoConnection;
+    attach(socket: WireSocket, host?: string): PaseoConnection;
     /** Route one inbound terminal stream frame. */
     private onBinaryFrame;
     /** Route one inbound text frame. */
@@ -95,6 +95,8 @@ export declare class PaseoDaemon {
      * commit message travels as its own argument, never through a shell.
      */
     private runCheckoutOperation;
+    /** A directory to resolve a relative suggestion against: the newest workspace. */
+    private defaultDirectory;
     /** Workspace identity for one directory this daemon advertised. */
     private workspaceIdForDirectory;
     /** Claim the lowest free stream slot for one terminal on this connection. */

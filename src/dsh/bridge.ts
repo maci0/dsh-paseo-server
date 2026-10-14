@@ -12,10 +12,60 @@
 
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { forgeToken, lookupPullRequest, parseGithubRemote } from './forge.ts'
-import { commitCheckout, pullCheckout, pushCheckout, readDiff, readGitStatus } from './git.ts'
-import type { PullRequestLookup } from './forge.ts'
-import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './git.ts'
+import {
+  createPullRequest as forgeCreatePullRequest,
+  forgeToken,
+  lookupPullRequest,
+  mergePullRequest as forgeMergePullRequest,
+  parseGithubRemote,
+  readCheckDetails,
+  readPullRequestTimeline,
+  setAutoMerge as forgeSetAutoMerge,
+} from './forge.ts'
+import {
+  commitCheckout,
+  commitFileDiff,
+  discardChanges,
+  listBranches,
+  listCommits,
+  mergeRef,
+  pullCheckout,
+  pushCheckout,
+  readDiff,
+  readGitStatus,
+  renameBranch,
+  resolveBranch,
+  stashList,
+  stashPop,
+  stashSave,
+  switchBranch,
+} from './git.ts'
+import type {
+  CheckDetails,
+  ForgeWriteResult,
+  GithubRemote,
+  PullRequestLookup,
+  PullRequestTimelineItem,
+} from './forge.ts'
+import type {
+  BranchEntry,
+  CommitEntry,
+  DiffCompare,
+  DiffFile,
+  GitOperationResult,
+  GitStatus,
+  StashEntry,
+} from './git.ts'
+import {
+  listDirectory,
+  readProjectConfig,
+  readWorkspaceFile,
+  suggestPaths,
+  writeProjectConfig,
+} from './files.ts'
+import type { DirectoryEntry, FileContent, PathSuggestion, ProjectConfigFile } from './files.ts'
+import { loadPausedReminders, savePausedReminders } from './paused-reminders.ts'
+import type { PausedReminder } from './paused-reminders.ts'
 import { fromPaseoCadence, toPaseoCadence } from './schedules.ts'
 import { readWorkspaceScripts } from './scripts.ts'
 import type { PaseoCadence } from './schedules.ts'
@@ -103,6 +153,13 @@ class DshBridge implements PaseoBridge {
 
   /** First instant this daemon saw each reminder, which stands in for a creation time. */
   private readonly scheduleSeenAt = new Map<string, string>()
+
+  /** Runtime reminder behind each client-visible reminder identity. */
+  private readonly scheduleDshIds = new Map<string, string>()
+
+  /** Reminders this daemon paused, and whether the store was read yet. */
+  private pausedReminders: readonly PausedReminder[] = []
+  private pausedLoaded = false
 
   private readonly scriptJobs = new Map<string, string>()
 
@@ -210,13 +267,194 @@ class DshBridge implements PaseoBridge {
     return pullCheckout(directory)
   }
 
+  /** Branch refs a client may switch to. */
+  async listBranches(directory: string, query?: string, limit?: number): Promise<readonly BranchEntry[]> {
+    return listBranches(directory, query, limit)
+  }
+
+  /** Whether one branch name resolves. */
+  async resolveBranch(
+    directory: string,
+    branch: string,
+  ): Promise<{ readonly exists: boolean; readonly resolvedRef: string | null; readonly isRemote: boolean }> {
+    return resolveBranch(directory, branch)
+  }
+
+  async switchBranch(directory: string, branch: string): Promise<GitOperationResult> {
+    return switchBranch(directory, branch)
+  }
+
+  async renameBranch(directory: string, branch: string): Promise<GitOperationResult> {
+    return renameBranch(directory, branch)
+  }
+
+  async discardChanges(directory: string, paths: readonly string[]): Promise<GitOperationResult> {
+    return discardChanges(directory, paths)
+  }
+
+  async stashSave(directory: string, branch?: string): Promise<GitOperationResult> {
+    return stashSave(directory, branch)
+  }
+
+  async stashList(directory: string, paseoOnly: boolean): Promise<readonly StashEntry[]> {
+    return stashList(directory, paseoOnly)
+  }
+
+  async stashPop(directory: string): Promise<GitOperationResult> {
+    return stashPop(directory)
+  }
+
+  async listCommits(directory: string): Promise<readonly CommitEntry[]> {
+    return listCommits(directory)
+  }
+
+  async commitFileDiff(directory: string, sha: string, path: string): Promise<readonly DiffFile[]> {
+    return commitFileDiff(directory, sha, path)
+  }
+
+  async mergeRef(directory: string, baseRef: string, strategy: 'merge' | 'squash'): Promise<GitOperationResult> {
+    return mergeRef(directory, baseRef, strategy)
+  }
+
+  /** List one workspace directory. */
+  async listDirectory(directory: string, path?: string): Promise<readonly DirectoryEntry[] | null> {
+    return listDirectory(directory, path)
+  }
+
+  /** Read one file inside a workspace directory. */
+  async readWorkspaceFile(directory: string, path: string): Promise<FileContent | null> {
+    return readWorkspaceFile(directory, path)
+  }
+
+  /** Remove one workspace record. */
+  async deleteWorkspace(workspaceId: string): Promise<boolean> {
+    const registry = this.ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
+    if (registry?.delete === undefined) return false
+    return registry.delete(workspaceId)
+  }
+
+  /** Suggest paths for a partially typed path. */
+  async suggestPaths(query: string, cwd: string, limit: number): Promise<readonly PathSuggestion[]> {
+    return suggestPaths(query, cwd, limit)
+  }
+
+  /** Read one project's config file. */
+  async readProjectConfig(directory: string): Promise<ProjectConfigFile | null> {
+    return readProjectConfig(directory)
+  }
+
+  /** Write one project's config file. */
+  async writeProjectConfig(
+    directory: string,
+    config: unknown,
+    expected: { readonly mtimeMs: number; readonly size: number } | null,
+  ): Promise<{ readonly revision: { readonly mtimeMs: number; readonly size: number } } | { readonly error: string }> {
+    return writeProjectConfig(directory, config, expected)
+  }
+
+  /** Workspaces whose derived project identity is one id. */
+  async workspacesOfProject(projectId: string): Promise<readonly WorkspaceRecord[]> {
+    return (await this.listWorkspaces()).filter((workspace) => workspace.projectId === projectId)
+  }
+
+  /** Pin or unpin every Session the workspace holds. */
+  async setWorkspacePinned(workspaceId: string, pinned: boolean): Promise<string | null> {
+    const registry = this.ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
+    if (registry === undefined) return null
+    if (pinned && registry.pinSession === undefined) return null
+    if (!pinned && registry.unpinSession === undefined) return null
+    const members = (await this.summaries())
+      .filter((summary) => summary.cwd !== undefined && this.workspaceForCwd(summary.cwd).id === workspaceId)
+    for (const summary of members) {
+      if (pinned) await registry.pinSession?.(summary.sessionId)
+      else await registry.unpinSession?.(summary.sessionId)
+    }
+    return pinned ? new Date().toISOString() : null
+  }
+
   /** Pull request facts for one directory's current branch. */
   async checkoutPrStatus(directory: string): Promise<PullRequestLookup> {
+    return lookupPullRequest(await this.forgeRepo(directory), (await this.forgeBranch(directory)) ?? '', forgeToken())
+  }
+
+  /** Open a pull request for the directory's current branch. */
+  async createPullRequest(directory: string, input: {
+    readonly title?: string
+    readonly body?: string
+    readonly baseRef?: string
+  }): Promise<ForgeWriteResult> {
+    const remote = await this.forgeRepo(directory)
+    const head = await this.forgeBranch(directory)
+    if (head === null) return { success: false, url: null, number: null, error: 'the directory is not on a branch' }
+    const existing = await lookupPullRequest(remote, head, forgeToken())
+    if (existing.status !== null) {
+      return { success: false, url: existing.status.url, number: existing.status.number, error: 'a pull request already exists for this branch' }
+    }
+    return forgeCreatePullRequest(remote, forgeToken(), {
+      head,
+      base: input.baseRef !== undefined && input.baseRef.length > 0 ? input.baseRef : 'main',
+      title: input.title !== undefined && input.title.length > 0 ? input.title : `Merge ${head}`,
+      body: input.body ?? '',
+    })
+  }
+
+  /** Merge the pull request whose head is the directory's current branch. */
+  async mergePullRequest(directory: string, method: 'merge' | 'squash' | 'rebase'): Promise<ForgeWriteResult> {
+    const found = await this.pullRequestNumber(directory)
+    if (typeof found === 'string') return { success: false, url: null, number: null, error: found }
+    return forgeMergePullRequest(await this.forgeRepo(directory), forgeToken(), found, method)
+  }
+
+  /** Turn auto-merge on or off for that pull request. */
+  async setPullRequestAutoMerge(
+    directory: string,
+    enabled: boolean,
+    method: 'merge' | 'squash' | 'rebase',
+  ): Promise<ForgeWriteResult> {
+    const found = await this.pullRequestNumber(directory)
+    if (typeof found === 'string') return { success: false, url: null, number: null, error: found }
+    return forgeSetAutoMerge(await this.forgeRepo(directory), forgeToken(), found, enabled, method)
+  }
+
+  /** Discussion of that pull request. */
+  async pullRequestTimeline(directory: string): Promise<{
+    readonly items: readonly PullRequestTimelineItem[]
+    readonly error: string | null
+    readonly number: number | null
+  }> {
+    const found = await this.pullRequestNumber(directory)
+    if (typeof found === 'string') return { items: [], error: found, number: null }
+    const timeline = await readPullRequestTimeline(await this.forgeRepo(directory), forgeToken(), found)
+    return { items: timeline.items, error: timeline.error, number: found }
+  }
+
+  /** One check run's details. */
+  async checkDetails(directory: string, checkRunId: number): Promise<{
+    readonly details: CheckDetails | null
+    readonly error: string | null
+  }> {
+    return readCheckDetails(await this.forgeRepo(directory), forgeToken(), checkRunId)
+  }
+
+  /** Repository behind one directory, refusing a remote this daemon cannot read. */
+  private async forgeRepo(directory: string): Promise<GithubRemote> {
     const status = await readGitStatus(directory)
-    if (!status.isGit || status.currentBranch === null) return { status: null, authenticated: false, error: null }
     const remote = parseGithubRemote(status.remoteUrl)
-    if (remote === null) return { status: null, authenticated: false, error: null }
-    return lookupPullRequest(remote, status.currentBranch, forgeToken())
+    if (remote === null) throw new Error('this directory has no GitHub origin remote')
+    return remote
+  }
+
+  /** Current branch of one directory, or null when it is not on one. */
+  private async forgeBranch(directory: string): Promise<string | null> {
+    const status = await readGitStatus(directory)
+    return status.isGit ? status.currentBranch : null
+  }
+
+  /** Pull request number for one directory, or why there is none. */
+  private async pullRequestNumber(directory: string): Promise<number | string> {
+    const lookup = await this.checkoutPrStatus(directory)
+    if (lookup.status !== null) return lookup.status.number
+    return lookup.error ?? 'no pull request is open for this branch'
   }
 
   /** Archive one session, which removes it from the active agent list. */
@@ -437,21 +675,35 @@ class DshBridge implements PaseoBridge {
     this.terminalOwners.delete(terminalId)
   }
 
-  /** Declared scripts of one workspace, each with its current lifecycle. */
-  /** Every recurring reminder this runtime holds, across Sessions. */
+  /** Every reminder this runtime holds, across Sessions, plus the paused ones. */
   async listSchedules(): Promise<readonly ScheduleRecord[]> {
-    const service = this.ctx.get('schedule') as ScheduleServiceLike | undefined
-    if (service === undefined) return []
     const records: ScheduleRecord[] = []
-    for (const summary of await this.summaries()) {
-      for (const view of await service.list({ sessionId: summary.sessionId })) {
-        const record = scheduleRecord(summary.sessionId, view, this.firstSeenAt(view.id))
-        // A one-shot reminder has no cadence Paseo can render, so it stays out
-        // of the listing instead of appearing as a recurrence that fires again.
-        if (record === null) continue
-        this.scheduleOwners.set(record.id, summary.sessionId)
-        records.push(record)
+    const service = this.ctx.get('schedule') as ScheduleServiceLike | undefined
+    const paused = await this.pausedList()
+    const pausedDshIds = new Set(paused.flatMap((entry) => entry.dshId === undefined ? [] : [entry.dshId]))
+    if (service !== undefined) {
+      for (const summary of await this.summaries()) {
+        for (const view of await service.list({ sessionId: summary.sessionId })) {
+          if (pausedDshIds.has(view.id)) continue
+          records.push(this.recordFor(summary.sessionId, view))
+        }
       }
+    }
+    for (const entry of paused) {
+      records.push({
+        id: entry.id,
+        agentId: entry.sessionId,
+        name: entry.title.length > 0 ? entry.title : null,
+        prompt: entry.prompt,
+        cadence: toPaseoCadence({ kind: 'cron', expression: '0 0 * * *' }) as PaseoCadence,
+        status: 'inactive',
+        createdAt: entry.pausedAt,
+        nextRunAt: null,
+        pausedAt: entry.pausedAt,
+        expiresAt: null,
+        maxRuns: null,
+        ...(isCadence(entry.cadence) ? { cadence: entry.cadence } : {}),
+      })
     }
     return records
   }
@@ -473,21 +725,82 @@ class DshBridge implements PaseoBridge {
     }, new AbortController().signal)
     const view = scheduleViewOf(created)
     if (view === null) throw new Error(scheduleErrorOf(created) ?? 'the reminder was not created')
-    const record = scheduleRecord(input.agentId, view, this.firstSeenAt(view.id))
-    if (record === null) throw new Error('the created reminder has no cadence Paseo can render')
+    const record = this.recordFor(input.agentId, view)
     this.scheduleOwners.set(record.id, input.agentId)
     return record
   }
 
   /** Remove one reminder from the Session that owns it. */
   async deleteSchedule(scheduleId: string): Promise<boolean> {
+    const paused = await this.pausedList()
+    const entry = paused.find((candidate) => candidate.id === scheduleId)
+    if (entry !== undefined) {
+      await this.savePaused(paused.filter((candidate) => candidate.id !== scheduleId))
+      return true
+    }
     const service = this.requireScheduleService()
     const sessionId = await this.scheduleOwner(scheduleId)
     if (sessionId === null) return false
-    const result = await service.delete({ sessionId, id: scheduleId }, new AbortController().signal)
+    const dshId = this.dshIdOf(scheduleId)
+    const result = await service.delete({ sessionId, id: dshId }, new AbortController().signal)
     const removed = result !== null && typeof result === 'object' && (result as { deleted?: unknown }).deleted !== false
     if (removed) this.scheduleOwners.delete(scheduleId)
     return removed
+  }
+
+  /**
+   * Pause one reminder.
+   *
+   * DSH cannot pause a reminder, so this removes it from the runtime and keeps
+   * the definition, which is the only way the reminder stops firing while
+   * staying resumable.
+   */
+  async pauseSchedule(scheduleId: string): Promise<boolean> {
+    const service = this.requireScheduleService()
+    const sessionId = await this.scheduleOwner(scheduleId)
+    if (sessionId === null) return false
+    const dshId = this.dshIdOf(scheduleId)
+    const view = (await service.list({ sessionId })).find((entry) => entry.id === dshId)
+    if (view === undefined) return false
+    const paused = await this.pausedList()
+    if (paused.some((entry) => entry.id === scheduleId)) return true
+    const cadence = this.cadenceOf(sessionId, view)
+    await service.delete({ sessionId, id: dshId }, new AbortController().signal)
+    await this.savePaused([
+      ...paused,
+      {
+        id: scheduleId,
+        sessionId,
+        title: view.title,
+        prompt: view.prompt,
+        cadence,
+        pausedAt: new Date().toISOString(),
+      },
+    ])
+    return true
+  }
+
+  /** Resume one paused reminder, which recreates it in the runtime. */
+  async resumeSchedule(scheduleId: string): Promise<ScheduleRecord> {
+    const paused = await this.pausedList()
+    const entry = paused.find((candidate) => candidate.id === scheduleId)
+    if (entry === undefined) throw new Error(`reminder ${scheduleId} is not paused`)
+    const service = this.requireScheduleService()
+    const timing = fromPaseoCadence(entry.cadence as PaseoCadence)
+    if ('error' in timing) throw new Error(timing.error)
+    const created = await service.create(entry.sessionId, {
+      prompt: entry.prompt,
+      title: entry.title,
+      ...timing,
+    }, new AbortController().signal)
+    const view = scheduleViewOf(created)
+    if (view === null) throw new Error(scheduleErrorOf(created) ?? 'the reminder was not resumed')
+    await this.savePaused([
+      ...paused.filter((candidate) => candidate.id !== scheduleId),
+      { ...entry, dshId: view.id },
+    ])
+    this.scheduleOwners.set(scheduleId, entry.sessionId)
+    return this.recordFor(entry.sessionId, view, scheduleId)
   }
 
   /** Deliver one reminder's prompt now, through the ordinary prompt path. */
@@ -495,7 +808,7 @@ class DshBridge implements PaseoBridge {
     const sessionId = await this.scheduleOwner(scheduleId)
     if (sessionId === null) throw new Error(`unknown reminder ${scheduleId}`)
     const service = this.requireScheduleService()
-    const view = (await service.list({ sessionId })).find((entry) => entry.id === scheduleId)
+    const view = (await service.list({ sessionId })).find((entry) => entry.id === this.dshIdOf(scheduleId))
     if (view === undefined) throw new Error(`unknown reminder ${scheduleId}`)
     await this.sendPrompt(sessionId, { text: view.prompt })
   }
@@ -513,6 +826,60 @@ class DshBridge implements PaseoBridge {
     const now = new Date().toISOString()
     this.scheduleSeenAt.set(scheduleId, now)
     return now
+  }
+
+  /** Project one runtime reminder, reusing the client identity it already had. */
+  private recordFor(sessionId: string, view: ScheduleRecordLike, id?: string): ScheduleRecord {
+    const paseoId = id ?? this.paseoIdOf(view.id) ?? view.id
+    const record = scheduleRecord(sessionId, view, this.firstSeenAt(paseoId), paseoId)
+    this.scheduleOwners.set(record.id, sessionId)
+    this.scheduleDshIds.set(record.id, view.id)
+    return record
+  }
+
+  /** Cadence one live reminder carries, for keeping it through a pause. */
+  private cadenceOf(sessionId: string, view: ScheduleRecordLike): PaseoCadence {
+    const record = scheduleRecord(sessionId, view, this.firstSeenAt(view.id), view.id)
+    return record.cadence
+  }
+
+  /** Runtime identity behind a client identity. */
+  private dshIdOf(paseoId: string): string {
+    return this.scheduleDshIds.get(paseoId) ?? paseoId
+  }
+
+  /** Client identity already given to one runtime reminder, if any. */
+  private paseoIdOf(dshId: string): string | undefined {
+    for (const [paseoId, known] of this.scheduleDshIds) {
+      if (known === dshId) return paseoId
+    }
+    return this.scheduleDshIds.get(dshId) === undefined && this.scheduleOwners.has(dshId) ? dshId : undefined
+  }
+
+  /** Paused reminders, read once and then kept in memory. */
+  private async pausedList(): Promise<readonly PausedReminder[]> {
+    if (this.pausedLoaded) return this.pausedReminders
+    this.pausedLoaded = true
+    const home = this.homePath()
+    if (home === undefined) return this.pausedReminders
+    this.pausedReminders = await loadPausedReminders(home)
+    for (const entry of this.pausedReminders) {
+      if (entry.dshId !== undefined) this.scheduleDshIds.set(entry.id, entry.dshId)
+    }
+    return this.pausedReminders
+  }
+
+  private async savePaused(paused: readonly PausedReminder[]): Promise<void> {
+    this.pausedReminders = [...paused]
+    const home = this.homePath()
+    if (home === undefined) return
+    await savePausedReminders(home, this.pausedReminders)
+  }
+
+  /** Harness home path builder, absent on a host that did not provide one. */
+  private homePath(): ((...segments: string[]) => string) | undefined {
+    const value = this.ctx.get('dshHomePath') as unknown
+    return typeof value === 'function' ? value as (...segments: string[]) => string : undefined
   }
 
   /** Session that owns one reminder, resolved from the cache or by listing. */
@@ -594,6 +961,7 @@ class DshBridge implements PaseoBridge {
     const job = jobId === undefined ? undefined : this.jobsView(jobId)
     return {
       name: definition.name,
+      workspaceId,
       type: definition.type,
       command: definition.command,
       port: definition.port,
@@ -1107,8 +1475,15 @@ function scheduleErrorOf(value: unknown): string | null {
   return typeof message === 'string' ? message : null
 }
 
-/** Project one reminder into the client shape, or null for a one-shot. */
-function scheduleRecord(agentId: string, view: ScheduleRecordLike, firstSeen: string): ScheduleRecord | null {
+/**
+ * Project one reminder into the client shape.
+ *
+ * A one-shot reminder projects onto the cron rule of its own instant, carries
+ * `maxRuns: 1`, and expires at that instant, which is what keeps a client from
+ * reading it as a recurrence that fires every year.
+ */
+function scheduleRecord(agentId: string, view: ScheduleRecordLike, firstSeen: string, id?: string): ScheduleRecord {
+  const oneShot = view.kind === 'at' || view.kind === 'after'
   const cadence = toPaseoCadence({
     kind: view.kind,
     ...(view.everySeconds === undefined ? {} : { everySeconds: view.everySeconds }),
@@ -1116,18 +1491,32 @@ function scheduleRecord(agentId: string, view: ScheduleRecordLike, firstSeen: st
     ...(view.timeZone === undefined ? {} : { timeZone: view.timeZone }),
     ...(view.time === undefined ? {} : { dailyTime: view.time }),
     ...(view.weekdays === undefined ? {} : { weekdays: view.weekdays }),
+    ...(view.scheduledAt === undefined ? {} : { scheduledAt: view.scheduledAt }),
   })
-  if (cadence === null) return null
+  const status = view.status === 'inactive' ? 'inactive' : 'active'
   return {
-    id: view.id,
+    id: id ?? view.id,
     agentId,
     name: view.title.length > 0 ? view.title : null,
     prompt: view.prompt,
-    cadence,
+    // A rule with no clock shape at all still lists: the client shows an
+    // hourly cadence rather than losing the reminder entirely.
+    cadence: cadence ?? { type: 'cron', expression: '0 * * * *', timezone: 'UTC' },
     // A record read back from storage carries no status; only an explicit
     // inactive marker means the reminder stopped.
-    status: view.status === 'inactive' ? 'inactive' : 'active',
+    status,
     createdAt: firstSeen,
-    nextRunAt: view.status === 'inactive' ? null : view.scheduledAt ?? null,
+    nextRunAt: status === 'inactive' ? null : view.scheduledAt ?? null,
+    pausedAt: null,
+    expiresAt: oneShot ? view.scheduledAt ?? null : null,
+    maxRuns: oneShot ? 1 : null,
   }
+}
+
+/** Whether a stored cadence still has the shape a client sent. */
+function isCadence(value: unknown): value is PaseoCadence {
+  if (value === null || typeof value !== 'object') return false
+  const cadence = value as { type?: unknown; everyMs?: unknown; expression?: unknown }
+  if (cadence.type === 'every') return typeof cadence.everyMs === 'number'
+  return cadence.type === 'cron' && typeof cadence.expression === 'string'
 }
