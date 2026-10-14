@@ -59,6 +59,8 @@ export interface AgentRecord {
         readonly turnId: string;
         readonly startedAt: string | null;
     } | null;
+    /** Parent session id for a session a parent spawned. */
+    readonly parentAgentId?: string | null;
 }
 /** One rendered timeline row. */
 export type TimelineItem = {
@@ -296,6 +298,25 @@ export interface PaseoBridge {
     }>;
     /** Workspace records whose project is one project identity. */
     workspacesOfProject(projectId: string): Promise<readonly WorkspaceRecord[]>;
+    /** Install a model on one agent. */
+    selectAgentModel(agentId: string, modelId: string | null): Promise<{
+        readonly provider: string;
+        readonly model: string;
+    }>;
+    /** Sessions a parent session spawned, which Paseo shows as provider subagents. */
+    listSubagents(parentAgentId: string): Promise<readonly AgentRecord[]>;
+    /**
+     * Render one session's conversation up to a boundary as text.
+     *
+     * Paseo's fork-context flow hands the client a text attachment to attach to
+     * a new agent; it does not create the session, so this returns the text and
+     * the client decides what to do with it.
+     */
+    forkContext(agentId: string, boundaryMessageId?: string): Promise<{
+        readonly text: string;
+        readonly itemCount: number;
+        readonly boundaryMessageId: string | null;
+    }>;
     /** Pull request facts for the current branch of one workspace directory. */
     checkoutPrStatus(directory: string): Promise<PullRequestLookup>;
     /** Open a pull request for the directory's current branch. */

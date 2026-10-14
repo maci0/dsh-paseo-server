@@ -219,6 +219,12 @@ export interface SessionControllerLike {
   }): Promise<{ readonly selected: { readonly provider: string; readonly model: string } }>
   /** Rename a session, when the composition supports it. */
   rename?(request: { readonly sessionId: string; readonly title: string }): Promise<{ readonly title: string }>
+  /** Fork a session at an event, when the composition supports it. */
+  fork?(request: {
+    readonly sessionId: string
+    readonly atSeq?: number
+    readonly allowMigration?: boolean
+  }): Promise<{ readonly sessionId: string }>
 }
 
 /** One HTTP route registration. */

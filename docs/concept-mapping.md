@@ -87,6 +87,19 @@ check run's details. Writing covers opening a pull request, merging it with the
 strategy the client asked for, and turning auto-merge on or off through
 GitHub's GraphQL mutation, because auto-merge has no REST endpoint.
 
+## Agent actions
+
+Selecting a model maps onto the session controller's selection endpoint: a
+`provider/model` id installs both, and a bare model keeps the agent's current
+provider. Modes, thinking options, and provider features have no DSH
+equivalent and answer with the reason.
+
+DSH child sessions carry the parent that spawned them, so the provider-subagent
+surface is a filter over the same session listing rather than a second source
+of truth. Fork-context renders the conversation up to a boundary as a text
+attachment, which is what the client asks for; creating a session is a
+separate action the client takes itself.
+
 ## Project and file surfaces
 
 A Paseo project is a directory the client groups workspaces under. Adding one

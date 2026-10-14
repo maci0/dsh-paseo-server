@@ -94,6 +94,9 @@ function fakeBridge() {
     async readProjectConfig() { return null },
     async writeProjectConfig() { return { revision: { mtimeMs: 0, size: 0 } } },
     async workspacesOfProject() { return [] },
+    async listSubagents() { return [] },
+    async selectAgentModel() { return { provider: 'stub', model: 'stub-model' } },
+    async forkContext() { return { text: 'User: hi', itemCount: 1, boundaryMessageId: null } },
     async createPullRequest() { return { success: true, url: null, number: null, error: null } },
     async mergePullRequest() { return { success: true, url: null, number: null, error: null } },
     async setPullRequestAutoMerge() { return { success: true, url: null, number: null, error: null } },
@@ -685,4 +688,64 @@ test('a forge read that throws still answers the client', async () => {
   const payload = client.last().payload as Record<string, unknown>
   assert.equal(client.last().type, 'checkout_pr_status_response')
   assert.match(String((payload.error as Record<string, unknown>).message), /no GitHub origin/)
+})
+
+test('set_agent_model_request reports the accepted selection', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'set_agent_model_request', requestId: 'r1', agentId: 'ses_1', modelId: 'stub/stub-model' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'set_agent_model_response')
+  assert.equal(payload.agentId, 'ses_1')
+  assert.equal(payload.accepted, true)
+  assert.equal(payload.error, null)
+})
+
+test('a model selection that fails says why', async () => {
+  const { bridge } = fakeBridge()
+  const failing: PaseoBridge = {
+    ...bridge,
+    selectAgentModel: async () => { throw new Error('unknown provider stub') },
+  }
+  const client = connect(makeDaemon(failing))
+  client.hello()
+  client.request({ type: 'set_agent_model_request', requestId: 'r1', agentId: 'ses_1', modelId: 'nope/nope' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(payload.accepted, false)
+  assert.match(String(payload.error), /unknown provider/)
+})
+
+test('the subagent surface lists sessions a parent spawned', async () => {
+  const { bridge } = fakeBridge()
+  const subagents: PaseoBridge = {
+    ...bridge,
+    listSubagents: async (parent) => [{
+      id: 'ses_child',
+      shortId: 'ses_child',
+      title: 'child',
+      provider: 'stub',
+      model: 'stub-model',
+      status: 'idle',
+      cwd: '/repo',
+      workspaceId: 'ws_1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      lastUserMessageAt: null,
+      parentAgentId: parent,
+    }],
+  }
+  const client = connect(makeDaemon(subagents))
+  client.hello()
+  client.request({ type: 'agent.provider_subagents.list.request', requestId: 'r1', parentAgentId: 'ses_1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'agent.provider_subagents.list.response')
+  const list = payload.subagents as readonly Record<string, unknown>[]
+  assert.equal(list.length, 1)
+  assert.equal(list[0]?.id, 'ses_child')
+  assert.equal(list[0]?.parentAgentId, 'ses_1')
+  assert.equal(list[0]?.status, 'completed')
 })

@@ -274,6 +274,14 @@ export interface SessionControllerLike {
     }): Promise<{
         readonly title: string;
     }>;
+    /** Fork a session at an event, when the composition supports it. */
+    fork?(request: {
+        readonly sessionId: string;
+        readonly atSeq?: number;
+        readonly allowMigration?: boolean;
+    }): Promise<{
+        readonly sessionId: string;
+    }>;
 }
 /** One HTTP route registration. */
 export interface WebRouteLike {

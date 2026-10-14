@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.13.1
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.14.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -83,8 +83,9 @@ creation (both `agent.create.request` and the legacy `create_agent_request`),
 timeline reads, prompt send with image attachments, interrupt, archive, the
 checkout status, diff, commit, push, and pull, terminals over the binary
 stream protocol, workspace scripts as background jobs, reminders, pull
-request facts, wait-for-finish, provider and model catalogs, and the pairing
-card with its QR.
+request facts, agent model selection, the subagent listing and fork-context
+attachment, the file explorer, project config, path suggestions, wait-for-finish,
+provider and model catalogs, and the pairing card with its QR.
 
 A full turn was driven end to end: `paseo run --provider <p>/<m>` created a DSH
 session, the harness ran the model call, and the client read the reply back from

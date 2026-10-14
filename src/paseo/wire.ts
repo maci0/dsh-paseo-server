@@ -92,6 +92,9 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'project.remove.request',
   'directory_suggestions_request',
   'read_project_config_request',
+  'agent.provider_subagents.list.request',
+  'agent.fork_context.request',
+  'set_agent_model_request',
   'write_project_config_request',
   'workspace.pin.set.request',
   'workspace.title.set.request',
@@ -1355,4 +1358,69 @@ export function projectConfigWriteFailed(
   code: 'project_not_found' | 'invalid_project_config' | 'stale_project_config' | 'write_failed',
 ): Record<string, unknown> {
   return { type: 'write_project_config_response', payload: { requestId, repoRoot, ok: false, error: { code } } }
+}
+
+/** One of the agent action responses, which share a payload. */
+export function agentActionResponse(
+  type:
+    | 'set_agent_model_response'
+    | 'set_agent_mode_response'
+    | 'set_agent_thinking_response'
+    | 'set_agent_feature_response'
+    | 'refresh_agent_response'
+    | 'resume_agent_response',
+  requestId: string,
+  agentId: string,
+  accepted: boolean,
+  error: string | null,
+): Record<string, unknown> {
+  return { type, payload: { requestId, agentId, accepted, error, notice: null } }
+}
+
+/** `agent.fork_context.response`. */
+export function forkContextResponse(
+  requestId: string,
+  agentId: string,
+  context: { readonly text: string; readonly itemCount: number; readonly boundaryMessageId: string | null },
+): Record<string, unknown> {
+  return {
+    type: 'agent.fork_context.response',
+    payload: {
+      requestId,
+      agentId,
+      attachment: context.itemCount === 0
+        ? null
+        : { type: 'text', mimeType: 'text/plain', contextKind: 'chat_history', title: 'Conversation', text: context.text },
+      itemCount: context.itemCount,
+      boundaryMessageId: context.boundaryMessageId,
+      boundaryCursor: null,
+      error: null,
+    },
+  }
+}
+
+/** `agent.provider_subagents.list.response`. */
+export function subagentList(requestId: string, parentAgentId: string, subagents: readonly AgentRecord[]): Record<string, unknown> {
+  return {
+    type: 'agent.provider_subagents.list.response',
+    payload: {
+      requestId,
+      parentAgentId,
+      subagents: subagents.map((agent) => ({
+        id: agent.id,
+        parentAgentId,
+        parentSubagentId: null,
+        provider: agent.provider,
+        title: agent.title,
+        description: null,
+        status: agent.status === 'running' ? 'running' : agent.status === 'error' ? 'failed' : 'completed',
+        createdAt: agent.createdAt,
+        updatedAt: agent.updatedAt,
+        toolCallId: null,
+        cwd: agent.cwd,
+        subtitle: null,
+      })),
+      error: null,
+    },
+  }
 }

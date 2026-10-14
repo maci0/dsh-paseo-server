@@ -352,6 +352,66 @@ class DshBridge implements PaseoBridge {
     return writeProjectConfig(directory, config, expected)
   }
 
+  /**
+   * Install a model on one agent.
+   *
+   * Paseo names a model as `provider/model`; a bare model keeps the agent's
+   * current provider, which is what a client picks from the same provider's
+   * catalog.
+   */
+  async selectAgentModel(agentId: string, modelId: string | null): Promise<{ readonly provider: string; readonly model: string }> {
+    const controller = this.requireController()
+    if (controller.selectModel === undefined) throw new Error('this harness cannot select a model')
+    const agent = await this.getAgent(agentId)
+    if (agent === null) throw new Error(`unknown agent ${agentId}`)
+    if (modelId === null || modelId.length === 0) {
+      const selected = await controller.selectModel({ sessionId: agentId, provider: agent.provider, model: agent.model ?? '' })
+      return { provider: selected.selected.provider, model: selected.selected.model }
+    }
+    const separator = modelId.indexOf('/')
+    const provider = separator > 0 ? modelId.slice(0, separator) : agent.provider
+    const model = separator > 0 ? modelId.slice(separator + 1) : modelId
+    const selected = await controller.selectModel({ sessionId: agentId, provider, model })
+    return { provider: selected.selected.provider, model: selected.selected.model }
+  }
+
+  /**
+   * Sessions one parent spawned.
+   *
+   * A DSH child session carries `origin: 'subagent'` and names its parent, so
+   * the subagent surface is a filter over the same listing the client uses for
+   * agents rather than a second source of truth.
+   */
+  async listSubagents(parentAgentId: string): Promise<readonly AgentRecord[]> {
+    const agents = await this.listAgents()
+    return agents.filter((agent) => agent.parentAgentId === parentAgentId)
+  }
+
+  /** Render one session's conversation up to one message as plain text. */
+  async forkContext(agentId: string, boundaryMessageId?: string): Promise<{
+    readonly text: string
+    readonly itemCount: number
+    readonly boundaryMessageId: string | null
+  }> {
+    const entries = await this.getTimeline(agentId)
+    const lines: string[] = []
+    let itemCount = 0
+    let boundary: string | null = null
+    for (const entry of entries) {
+      const item = entry.item
+      const rendered = renderTimelineLine(item)
+      if (rendered !== null) {
+        lines.push(rendered)
+        itemCount += 1
+      }
+      if (boundaryMessageId !== undefined && item.type === 'user_message' && item.messageId === boundaryMessageId) {
+        boundary = boundaryMessageId
+        break
+      }
+    }
+    return { text: lines.join('\n'), itemCount, boundaryMessageId: boundary }
+  }
+
   /** Workspaces whose derived project identity is one id. */
   async workspacesOfProject(projectId: string): Promise<readonly WorkspaceRecord[]> {
     return (await this.listWorkspaces()).filter((workspace) => workspace.projectId === projectId)
@@ -1172,6 +1232,7 @@ class DshBridge implements PaseoBridge {
       provider: header?.config?.provider ?? projectedSelection(summary)?.provider ?? this.defaultProvider,
       model: header?.config?.model ?? projectedSelection(summary)?.model ?? this.defaultModel,
       status,
+      ...(summary.parentSessionId === undefined ? {} : { parentAgentId: summary.parentSessionId }),
       cwd: directory,
       workspaceId: workspace?.id ?? this.workspaceForCwd(directory).id,
       createdAt: updatedAt,
@@ -1527,4 +1588,13 @@ function isCadence(value: unknown): value is PaseoCadence {
   const cadence = value as { type?: unknown; everyMs?: unknown; expression?: unknown }
   if (cadence.type === 'every') return typeof cadence.everyMs === 'number'
   return cadence.type === 'cron' && typeof cadence.expression === 'string'
+}
+
+/** One timeline row as a plain line of text, or null for a row with nothing to say. */
+function renderTimelineLine(item: TimelineItem): string | null {
+  if (item.type === 'user_message') return `User: ${item.text}`
+  if (item.type === 'assistant_message') return `Assistant: ${item.text}`
+  if (item.type === 'reasoning') return `Reasoning: ${item.text}`
+  if (item.type === 'tool_call') return `Tool ${item.name} (${item.status})`
+  return null
 }

@@ -273,3 +273,13 @@ export declare function projectConfigWritten(requestId: string, repoRoot: string
 }): Record<string, unknown>;
 /** `write_project_config_response` failure. */
 export declare function projectConfigWriteFailed(requestId: string, repoRoot: string, code: 'project_not_found' | 'invalid_project_config' | 'stale_project_config' | 'write_failed'): Record<string, unknown>;
+/** One of the agent action responses, which share a payload. */
+export declare function agentActionResponse(type: 'set_agent_model_response' | 'set_agent_mode_response' | 'set_agent_thinking_response' | 'set_agent_feature_response' | 'refresh_agent_response' | 'resume_agent_response', requestId: string, agentId: string, accepted: boolean, error: string | null): Record<string, unknown>;
+/** `agent.fork_context.response`. */
+export declare function forkContextResponse(requestId: string, agentId: string, context: {
+    readonly text: string;
+    readonly itemCount: number;
+    readonly boundaryMessageId: string | null;
+}): Record<string, unknown>;
+/** `agent.provider_subagents.list.response`. */
+export declare function subagentList(requestId: string, parentAgentId: string, subagents: readonly AgentRecord[]): Record<string, unknown>;

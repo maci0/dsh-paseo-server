@@ -34,6 +34,9 @@ import {
   checkoutDiffUpdate,
   attentionClearedFor,
   directorySuggestions,
+  agentActionResponse,
+  forkContextResponse,
+  subagentList,
   projectAdded,
   projectConfigMissing,
   projectConfigRead,
@@ -921,6 +924,39 @@ export class PaseoDaemon {
         }
         case 'open_in_editor_request': {
           reply(openedInEditor(requestId, 'this daemon runs headless; it has no editor to open a file in'))
+          return
+        }
+        case 'set_agent_model_request': {
+          const agentId = stringField(message, 'agentId')
+          if (agentId === undefined) {
+            reply(agentActionResponse('set_agent_model_response', requestId, '', false, 'agentId is required'))
+            return
+          }
+          try {
+            await this.options.bridge.selectAgentModel(agentId, stringField(message, 'modelId') ?? null)
+            reply(agentActionResponse('set_agent_model_response', requestId, agentId, true, null))
+          } catch (error) {
+            reply(agentActionResponse('set_agent_model_response', requestId, agentId, false, error instanceof Error ? error.message : String(error)))
+          }
+          return
+        }
+        case 'agent.provider_subagents.list.request': {
+          const parentAgentId = stringField(message, 'parentAgentId')
+          if (parentAgentId === undefined) {
+            reply(rpcError(requestId, type, 'parentAgentId is required', 'invalid_request'))
+            return
+          }
+          reply(subagentList(requestId, parentAgentId, await this.options.bridge.listSubagents(parentAgentId)))
+          return
+        }
+        case 'agent.fork_context.request': {
+          const agentId = stringField(message, 'agentId')
+          if (agentId === undefined) {
+            reply(rpcError(requestId, type, 'agentId is required', 'invalid_request'))
+            return
+          }
+          const context = await this.options.bridge.forkContext(agentId, stringField(message, 'boundaryMessageId'))
+          reply(forkContextResponse(requestId, agentId, context))
           return
         }
         case 'daemon.get_status.request': {
