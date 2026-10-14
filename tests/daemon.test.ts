@@ -81,6 +81,10 @@ function fakeBridge() {
     async resizeTerminal() {},
     async renameTerminal() {},
     async closeTerminal() {},
+    async listSchedules() { return [] },
+    async createSchedule() { throw new Error('unused') },
+    async deleteSchedule() { return true },
+    async runScheduleNow() {},
     async listWorkspaceScripts() { return [] },
     async startWorkspaceScript() { throw new Error('unused') },
     async stopWorkspaceScript() { throw new Error('unused') },
@@ -565,4 +569,38 @@ test('a workspace script request without a workspace is refused', async () => {
   client.request({ type: 'workspace.script.start.request', requestId: 'r1', scriptName: 'dev' })
   await client.settle()
   assert.equal(client.last().type, 'rpc_error')
+})
+
+test('schedule/create without a target agent is refused with the reason', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'schedule/create', requestId: 'r1', prompt: 'check the build', cadence: { type: 'every', everyMs: 60_000 } })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'schedule/create/response')
+  assert.equal(payload.schedule, null)
+  assert.match(String(payload.error), /agent target/)
+})
+
+test('schedule/pause says what this daemon can do instead', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'schedule/pause', requestId: 'r1', scheduleId: 'sch_1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'schedule/pause/response')
+  assert.match(String(payload.error), /delete it instead/)
+})
+
+test('schedule/list answers with the runtime reminders', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'schedule/list', requestId: 'r1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'schedule/list/response')
+  assert.deepEqual(payload.schedules, [])
 })

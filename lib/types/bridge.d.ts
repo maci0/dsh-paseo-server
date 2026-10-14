@@ -8,6 +8,7 @@
  * @module dsh-paseo-server/bridge
  */
 import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './dsh/git.ts';
+import type { PaseoCadence } from './dsh/schedules.ts';
 /** Disposer returned by every subscription. */
 export type Disposable = () => void;
 /** Paseo agent lifecycle statuses, as the protocol defines them. */
@@ -95,6 +96,18 @@ export interface TimelineEntry {
     readonly seq: number;
     /** Turn the row belongs to, when the runtime reports one. */
     readonly turnId?: string;
+}
+/** One reminder, as a Paseo client sees it. */
+export interface ScheduleRecord {
+    readonly id: string;
+    /** Agent the prompt reaches; it is the owning Session here. */
+    readonly agentId: string;
+    readonly name: string | null;
+    readonly prompt: string;
+    readonly cadence: PaseoCadence;
+    readonly status: 'active' | 'inactive';
+    readonly createdAt: string;
+    readonly nextRunAt: string | null;
 }
 /** One declared workspace script and what it is doing now. */
 export interface WorkspaceScriptRecord {
@@ -228,6 +241,20 @@ export interface PaseoBridge {
     /** Terminals this runtime currently retains. */
     listTerminals(): Promise<readonly TerminalRecord[]>;
     /** Allocate one terminal inside a workspace and return its descriptor. */
+    /** Every recurring reminder this runtime holds, across Sessions. */
+    listSchedules(): Promise<readonly ScheduleRecord[]>;
+    /** Create one reminder for an agent. */
+    createSchedule(input: {
+        /** Paseo target: the agent the prompt reaches, which is a DSH Session here. */
+        readonly agentId: string;
+        readonly prompt: string;
+        readonly name?: string;
+        readonly cadence: PaseoCadence;
+    }): Promise<ScheduleRecord>;
+    /** Remove one reminder. */
+    deleteSchedule(scheduleId: string): Promise<boolean>;
+    /** Deliver one reminder's prompt immediately. */
+    runScheduleNow(scheduleId: string): Promise<void>;
     createTerminal(input: {
         /** Workspace to open the shell in; its directory becomes the shell's cwd. */
         readonly workspaceId: string;

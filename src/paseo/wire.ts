@@ -16,6 +16,7 @@ import type {
   TimelineEntry,
   TimelineItem,
   WorkspaceRecord,
+  ScheduleRecord,
   WorkspaceScriptRecord,
 } from '../bridge.ts'
 
@@ -72,6 +73,15 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'workspace.script.list.request',
   'workspace.script.start.request',
   'workspace.script.stop.request',
+  'schedule/list',
+  'schedule/create',
+  'schedule/delete',
+  'schedule/run-once',
+  'schedule/inspect',
+  'schedule/pause',
+  'schedule/resume',
+  'schedule/update',
+  'schedule/logs',
   'checkout_status_request',
   'checkout_commit_request',
   'checkout_push_request',
@@ -855,4 +865,46 @@ export function scriptStatusUpdate(workspaceId: string, scripts: readonly Worksp
 /** `agent_deleted`, the answer to a delete request this daemon archives instead. */
 export function agentDeleted(agentId: string): Record<string, unknown> {
   return { type: 'agent_deleted', payload: { agentId } }
+}
+
+/** `schedule/list/response`. */
+export function scheduleList(requestId: string, schedules: readonly ScheduleRecord[]): Record<string, unknown> {
+  return { type: 'schedule/list/response', payload: { requestId, schedules: schedules.map(scheduleSummary), error: null } }
+}
+
+/** `schedule/create/response`. */
+export function scheduleCreated(requestId: string, schedule: ScheduleRecord | null, error: string | null): Record<string, unknown> {
+  return {
+    type: 'schedule/create/response',
+    payload: { requestId, schedule: schedule === null ? null : scheduleSummary(schedule), error },
+  }
+}
+
+/** `schedule/delete/response`. */
+export function scheduleDeleted(requestId: string, scheduleId: string, error: string | null = null): Record<string, unknown> {
+  return { type: 'schedule/delete/response', payload: { requestId, scheduleId, error } }
+}
+
+/** `schedule/run-once/response`. */
+export function scheduleRanOnce(requestId: string, scheduleId: string, error: string | null = null): Record<string, unknown> {
+  return { type: 'schedule/run-once/response', payload: { requestId, scheduleId, error } }
+}
+
+/** One reminder in the client's shape. */
+function scheduleSummary(record: ScheduleRecord): Record<string, unknown> {
+  return {
+    id: record.id,
+    name: record.name,
+    prompt: record.prompt,
+    cadence: record.cadence,
+    target: { type: 'agent', agentId: record.agentId },
+    status: record.status,
+    createdAt: record.createdAt,
+    updatedAt: record.createdAt,
+    nextRunAt: record.nextRunAt,
+    lastRunAt: null,
+    pausedAt: null,
+    expiresAt: null,
+    maxRuns: null,
+  }
 }

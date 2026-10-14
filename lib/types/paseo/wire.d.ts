@@ -8,7 +8,7 @@
  * @module dsh-paseo-server/paseo/wire
  */
 import type { DiffFile, GitStatus } from '../dsh/git.ts';
-import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord, WorkspaceScriptRecord } from '../bridge.ts';
+import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord, ScheduleRecord, WorkspaceScriptRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
 export declare const PASEO_PROTOCOL_VERSION = 1;
 /** Paseo daemon version this server reports. */
@@ -187,3 +187,11 @@ export declare function workspaceScriptResponse(type: 'workspace.script.list.res
 export declare function scriptStatusUpdate(workspaceId: string, scripts: readonly WorkspaceScriptRecord[]): Record<string, unknown>;
 /** `agent_deleted`, the answer to a delete request this daemon archives instead. */
 export declare function agentDeleted(agentId: string): Record<string, unknown>;
+/** `schedule/list/response`. */
+export declare function scheduleList(requestId: string, schedules: readonly ScheduleRecord[]): Record<string, unknown>;
+/** `schedule/create/response`. */
+export declare function scheduleCreated(requestId: string, schedule: ScheduleRecord | null, error: string | null): Record<string, unknown>;
+/** `schedule/delete/response`. */
+export declare function scheduleDeleted(requestId: string, scheduleId: string, error?: string | null): Record<string, unknown>;
+/** `schedule/run-once/response`. */
+export declare function scheduleRanOnce(requestId: string, scheduleId: string, error?: string | null): Record<string, unknown>;

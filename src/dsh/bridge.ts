@@ -14,7 +14,9 @@ import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { commitCheckout, pullCheckout, pushCheckout, readDiff, readGitStatus } from './git.ts'
 import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './git.ts'
+import { fromPaseoCadence, toPaseoCadence } from './schedules.ts'
 import { readWorkspaceScripts } from './scripts.ts'
+import type { PaseoCadence } from './schedules.ts'
 import type { WorkspaceScriptDefinition } from './scripts.ts'
 import type {
   AgentRecord,
@@ -25,6 +27,7 @@ import type {
   PaseoBridge,
   TimelineEntry,
   TerminalEvent,
+  ScheduleRecord,
   TerminalRecord,
   TimelineItem,
   WorkspaceRecord,
@@ -45,6 +48,8 @@ import type {
   TerminalFrameLike,
   JobViewLike,
   JobsLike,
+  ScheduleRecordLike,
+  ScheduleServiceLike,
   TerminalInfoLike,
   WorkspaceLike,
   WorkspaceRegistryLike,
@@ -91,6 +96,12 @@ class DshBridge implements PaseoBridge {
   /** Client-minted prompt identities awaiting their user/message event, oldest first. */
   /** Owning session and writable attachment of every terminal this daemon saw. */
   /** Running script jobs, keyed by workspace and script name. */
+  /** Session that owns each reminder this daemon has seen. */
+  private readonly scheduleOwners = new Map<string, string>()
+
+  /** First instant this daemon saw each reminder, which stands in for a creation time. */
+  private readonly scheduleSeenAt = new Map<string, string>()
+
   private readonly scriptJobs = new Map<string, string>()
 
   private readonly terminalOwners = new Map<string, { sessionId: string; attachmentId?: string }>()
@@ -416,6 +427,97 @@ class DshBridge implements PaseoBridge {
   }
 
   /** Declared scripts of one workspace, each with its current lifecycle. */
+  /** Every recurring reminder this runtime holds, across Sessions. */
+  async listSchedules(): Promise<readonly ScheduleRecord[]> {
+    const service = this.ctx.get('schedule') as ScheduleServiceLike | undefined
+    if (service === undefined) return []
+    const records: ScheduleRecord[] = []
+    for (const summary of await this.summaries()) {
+      for (const view of await service.list({ sessionId: summary.sessionId })) {
+        const record = scheduleRecord(summary.sessionId, view, this.firstSeenAt(view.id))
+        // A one-shot reminder has no cadence Paseo can render, so it stays out
+        // of the listing instead of appearing as a recurrence that fires again.
+        if (record === null) continue
+        this.scheduleOwners.set(record.id, summary.sessionId)
+        records.push(record)
+      }
+    }
+    return records
+  }
+
+  /** Create one reminder owned by the target agent's Session. */
+  async createSchedule(input: {
+    readonly agentId: string
+    readonly prompt: string
+    readonly name?: string
+    readonly cadence: PaseoCadence
+  }): Promise<ScheduleRecord> {
+    const service = this.requireScheduleService()
+    const timing = fromPaseoCadence(input.cadence)
+    if ('error' in timing) throw new Error(timing.error)
+    const created = await service.create(input.agentId, {
+      prompt: input.prompt,
+      title: input.name !== undefined && input.name.trim().length > 0 ? input.name : defaultScheduleTitle(input.prompt),
+      ...timing,
+    }, new AbortController().signal)
+    const view = scheduleViewOf(created)
+    if (view === null) throw new Error(scheduleErrorOf(created) ?? 'the reminder was not created')
+    const record = scheduleRecord(input.agentId, view, this.firstSeenAt(view.id))
+    if (record === null) throw new Error('the created reminder has no cadence Paseo can render')
+    this.scheduleOwners.set(record.id, input.agentId)
+    return record
+  }
+
+  /** Remove one reminder from the Session that owns it. */
+  async deleteSchedule(scheduleId: string): Promise<boolean> {
+    const service = this.requireScheduleService()
+    const sessionId = await this.scheduleOwner(scheduleId)
+    if (sessionId === null) return false
+    const result = await service.delete({ sessionId, id: scheduleId }, new AbortController().signal)
+    const removed = result !== null && typeof result === 'object' && (result as { deleted?: unknown }).deleted !== false
+    if (removed) this.scheduleOwners.delete(scheduleId)
+    return removed
+  }
+
+  /** Deliver one reminder's prompt now, through the ordinary prompt path. */
+  async runScheduleNow(scheduleId: string): Promise<void> {
+    const sessionId = await this.scheduleOwner(scheduleId)
+    if (sessionId === null) throw new Error(`unknown reminder ${scheduleId}`)
+    const service = this.requireScheduleService()
+    const view = (await service.list({ sessionId })).find((entry) => entry.id === scheduleId)
+    if (view === undefined) throw new Error(`unknown reminder ${scheduleId}`)
+    await this.sendPrompt(sessionId, { text: view.prompt })
+  }
+
+  /**
+   * When this daemon first saw a reminder.
+   *
+   * DSH records no creation instant, so the closest fact available is when the
+   * daemon learned of the reminder, which for anything created here is its
+   * creation moment.
+   */
+  private firstSeenAt(scheduleId: string): string {
+    const known = this.scheduleSeenAt.get(scheduleId)
+    if (known !== undefined) return known
+    const now = new Date().toISOString()
+    this.scheduleSeenAt.set(scheduleId, now)
+    return now
+  }
+
+  /** Session that owns one reminder, resolved from the cache or by listing. */
+  private async scheduleOwner(scheduleId: string): Promise<string | null> {
+    const cached = this.scheduleOwners.get(scheduleId)
+    if (cached !== undefined) return cached
+    await this.listSchedules()
+    return this.scheduleOwners.get(scheduleId) ?? null
+  }
+
+  private requireScheduleService(): ScheduleServiceLike {
+    const service = this.ctx.get('schedule') as ScheduleServiceLike | undefined
+    if (service === undefined) throw new Error('the schedule service is not mounted')
+    return service
+  }
+
   async listWorkspaceScripts(workspaceId: string): Promise<readonly WorkspaceScriptRecord[]> {
     const workspace = await this.workspaceFor(workspaceId)
     if (workspace === undefined) throw new Error(`unknown workspace ${workspaceId}`)
@@ -972,4 +1074,49 @@ function scriptKey(workspaceId: string, name: string): string {
 function exitCodeOf(detail: string | undefined): number | null {
   const match = detail?.match(/exit code: (\d+)/)
   return match === null || match === undefined ? null : Number(match[1])
+}
+
+/** Title a reminder gets when the client named none. */
+function defaultScheduleTitle(prompt: string): string {
+  const line = prompt.trim().split('\n')[0] ?? ''
+  return line.length <= 120 ? line : line.slice(0, 120)
+}
+
+/** Reminder view inside a create result, or null when the result is an error. */
+function scheduleViewOf(value: unknown): ScheduleRecordLike | null {
+  if (value === null || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  return typeof record.id === 'string' && typeof record.kind === 'string' ? record as unknown as ScheduleRecordLike : null
+}
+
+/** Error text a failed reminder creation carries, when it carries one. */
+function scheduleErrorOf(value: unknown): string | null {
+  if (value === null || typeof value !== 'object') return null
+  const message = (value as { message?: unknown }).message
+  return typeof message === 'string' ? message : null
+}
+
+/** Project one reminder into the client shape, or null for a one-shot. */
+function scheduleRecord(agentId: string, view: ScheduleRecordLike, firstSeen: string): ScheduleRecord | null {
+  const cadence = toPaseoCadence({
+    kind: view.kind,
+    ...(view.everySeconds === undefined ? {} : { everySeconds: view.everySeconds }),
+    ...(view.expression === undefined ? {} : { expression: view.expression }),
+    ...(view.timeZone === undefined ? {} : { timeZone: view.timeZone }),
+    ...(view.time === undefined ? {} : { dailyTime: view.time }),
+    ...(view.weekdays === undefined ? {} : { weekdays: view.weekdays }),
+  })
+  if (cadence === null) return null
+  return {
+    id: view.id,
+    agentId,
+    name: view.title.length > 0 ? view.title : null,
+    prompt: view.prompt,
+    cadence,
+    // A record read back from storage carries no status; only an explicit
+    // inactive marker means the reminder stopped.
+    status: view.status === 'inactive' ? 'inactive' : 'active',
+    createdAt: firstSeen,
+    nextRunAt: view.status === 'inactive' ? null : view.scheduledAt ?? null,
+  }
 }

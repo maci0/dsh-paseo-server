@@ -160,6 +160,38 @@ export interface WorkspaceLike {
     readonly updatedAt: string;
     readonly sessionIds: readonly string[];
 }
+/** One durable reminder, with the rule fields the service stores. */
+export interface ScheduleRecordLike {
+    readonly id: string;
+    readonly title: string;
+    readonly prompt: string;
+    /** Absent on a record read back from storage, where an active row is implied. */
+    readonly status?: 'active' | 'inactive';
+    readonly kind: 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron';
+    readonly scheduledAt?: string;
+    readonly everySeconds?: number;
+    readonly expression?: string;
+    readonly timeZone?: string;
+    /** Clock time of a daily or weekly reminder, as `HH:MM:SS`. */
+    readonly time?: string;
+    readonly weekdays?: readonly number[];
+}
+/** Durable reminder surface, scoped to the Session that owns each reminder. */
+export interface ScheduleServiceLike {
+    create(sessionId: string, request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+    list(request: {
+        readonly sessionId: string;
+    }): Promise<readonly ScheduleRecordLike[]>;
+    delete(request: {
+        readonly sessionId: string;
+        readonly id: string;
+    }, signal?: AbortSignal): Promise<unknown>;
+    history(request: {
+        readonly sessionId: string;
+        readonly id: string;
+        readonly limit: number;
+    }): Promise<unknown>;
+}
 /** Workspace registry surface. */
 export interface WorkspaceRegistryLike {
     list(): readonly WorkspaceLike[];

@@ -7,6 +7,7 @@
 
 import type { AgentRecord, BridgeEvent, PaseoBridge, TerminalEvent, TerminalRecord, WorkspaceRecord } from '../bridge.ts'
 import type { DiffCompare, DiffFile, GitOperationResult } from '../dsh/git.ts'
+import type { PaseoCadence } from '../dsh/schedules.ts'
 import {
   TERMINAL_MAX_SLOT,
   TERMINAL_OPCODE,
@@ -42,6 +43,10 @@ import {
   terminalSubscribeFailed,
   terminalSubscribed,
   terminalsChanged,
+  scheduleCreated,
+  scheduleDeleted,
+  scheduleList,
+  scheduleRanOnce,
   scriptStatusUpdate,
   terminalsResponse,
   workspaceScriptResponse,
@@ -549,6 +554,95 @@ export class PaseoDaemon {
           }
           return
         }
+        case 'schedule/list': {
+          reply(scheduleList(requestId, await this.options.bridge.listSchedules()))
+          return
+        }
+        case 'schedule/create': {
+          const prompt = stringField(message, 'prompt')
+          const target = recordValue(message.target)
+          const agentId = target === undefined ? undefined : stringField(target, 'agentId')
+          if (prompt === undefined || agentId === undefined) {
+            reply(scheduleCreated(requestId, null, 'a reminder needs a prompt and an agent target'))
+            return
+          }
+          const cadence = paseoCadence(message.cadence)
+          if (cadence === null) {
+            reply(scheduleCreated(requestId, null, 'the request carries no cadence this daemon understands'))
+            return
+          }
+          try {
+            const created = await this.options.bridge.createSchedule({
+              agentId,
+              prompt,
+              ...(stringField(message, 'name') === undefined ? {} : { name: stringField(message, 'name') }),
+              cadence,
+            })
+            reply(scheduleCreated(requestId, created, null))
+          } catch (error) {
+            reply(scheduleCreated(requestId, null, error instanceof Error ? error.message : String(error)))
+          }
+          return
+        }
+        case 'schedule/delete': {
+          const scheduleId = stringField(message, 'scheduleId')
+          if (scheduleId === undefined) {
+            reply(scheduleDeleted(requestId, '', 'scheduleId is required'))
+            return
+          }
+          const removed = await this.options.bridge.deleteSchedule(scheduleId)
+          reply(scheduleDeleted(requestId, scheduleId, removed ? null : 'the reminder is gone already'))
+          return
+        }
+        case 'schedule/run-once': {
+          const scheduleId = stringField(message, 'scheduleId')
+          if (scheduleId === undefined) {
+            reply(scheduleRanOnce(requestId, '', 'scheduleId is required'))
+            return
+          }
+          try {
+            await this.options.bridge.runScheduleNow(scheduleId)
+            reply(scheduleRanOnce(requestId, scheduleId))
+          } catch (error) {
+            reply(scheduleRanOnce(requestId, scheduleId, error instanceof Error ? error.message : String(error)))
+          }
+          return
+        }
+        case 'schedule/inspect': {
+          const scheduleId = stringField(message, 'scheduleId')
+          const found = (await this.options.bridge.listSchedules()).find((entry) => entry.id === scheduleId)
+          if (found === undefined) {
+            reply({ type: 'schedule/inspect/response', payload: { requestId, schedule: null, error: 'unknown reminder' } })
+            return
+          }
+          reply({ type: 'schedule/inspect/response', payload: { requestId, schedule: found, error: null } })
+          return
+        }
+        case 'schedule/pause':
+        case 'schedule/resume': {
+          // DSH has no paused state: a reminder is active or deleted. Saying so
+          // is better than pretending, so the client can offer the deletion.
+          const scheduleId = stringField(message, 'scheduleId') ?? ''
+          const responseType = type === 'schedule/pause' ? 'schedule/pause/response' : 'schedule/resume/response'
+          reply({
+            type: responseType,
+            payload: { requestId, scheduleId, error: 'this daemon cannot pause a reminder; delete it instead' },
+          })
+          return
+        }
+        case 'schedule/update': {
+          reply(rpcError(requestId, type, 'this daemon cannot retime a reminder in place', 'unsupported'))
+          return
+        }
+        case 'schedule/logs': {
+          const scheduleId = stringField(message, 'scheduleId')
+          if (scheduleId === undefined) {
+            reply(rpcError(requestId, type, 'scheduleId is required', 'invalid_request'))
+            return
+          }
+          reply({ type: 'schedule/logs/response', payload: { requestId, scheduleId, runs: [], error: null } })
+          return
+        }
         case 'daemon.get_status.request': {
           reply(daemonStatus({
             requestId,
@@ -1037,4 +1131,22 @@ function checkoutOperationResponse(
       requestId,
     },
   }
+}
+
+/** Cadence a schedule request asked for, or null when it is malformed. */
+function paseoCadence(value: unknown): PaseoCadence | null {
+  const cadence = recordValue(value)
+  if (cadence === undefined) return null
+  const type = stringField(cadence, 'type')
+  if (type === 'every') {
+    const everyMs = cadence.everyMs
+    return typeof everyMs === 'number' && Number.isFinite(everyMs) && everyMs > 0 ? { type: 'every', everyMs } : null
+  }
+  if (type === 'cron') {
+    const expression = stringField(cadence, 'expression')
+    if (expression === undefined || expression.trim().length === 0) return null
+    const timezone = stringField(cadence, 'timezone')
+    return { type: 'cron', expression, ...(timezone === undefined ? {} : { timezone }) }
+  }
+  return null
 }

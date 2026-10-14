@@ -78,14 +78,27 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 
 ## Still to build
 
-Schedules and heartbeats and the forge half of the git surface (pull requests,
-checks, forge search) are not bridged yet. Each has a DSH counterpart to map
-onto, so none is deferred on principle; this table tracks what is left.
+Forge panels are the one Paseo surface with no DSH counterpart: pull requests,
+checks, and forge search need a forge client, which the harness does not ship
+and this plugin will not guess at.
 
-| Paseo feature | Target |
-| --- | --- |
-| Schedules and heartbeats | The DSH schedule plugin's own store. |
-| Forge panels and pull requests | A forge client, which the harness does not ship. |
+## Reminders
+
+Paseo schedules a prompt against an agent on an interval or a cron expression;
+DSH stores the same thing per Session. The mapping is direct: the Paseo target
+agent is the owning Session, an interval becomes `every_seconds`, and a cron
+expression becomes the DSH cron rule with its zone.
+
+The conversion is lossy in one direction by design. DSH also has one-shot
+reminders, which Paseo cannot render, so they stay out of the listing instead
+of appearing as a recurrence that would fire again. A cadence faster than the
+DSH floor of one minute is refused with that reason.
+
+DSH records no creation instant and no paused state. A listed reminder reports
+when this daemon first saw it, and pause and resume answer with the reason they
+cannot work here rather than pretending: delete the reminder instead. Run-once
+delivers the prompt through the ordinary prompt path, so it resumes a persisted
+Session the same way a message does.
 
 ## Workspace scripts and deletion
 
