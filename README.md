@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.1.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
