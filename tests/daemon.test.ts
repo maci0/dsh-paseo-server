@@ -658,3 +658,31 @@ test('schedule/list answers with the runtime reminders', async () => {
   assert.equal(client.last().type, 'schedule/list/response')
   assert.deepEqual(payload.schedules, [])
 })
+
+test('checkout_pr_status answers with no pull request when the remote is not GitHub', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'checkout_pr_status_request', requestId: 'r1', cwd: '/repo' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'checkout_pr_status_response')
+  assert.equal(payload.status, null)
+  assert.equal(payload.authState, 'unauthenticated')
+  assert.equal(payload.githubFeaturesEnabled, false)
+})
+
+test('a forge read that throws still answers the client', async () => {
+  const { bridge } = fakeBridge()
+  const failing: PaseoBridge = {
+    ...bridge,
+    checkoutPrStatus: async () => { throw new Error('no GitHub origin remote') },
+  }
+  const client = connect(makeDaemon(failing))
+  client.hello()
+  client.request({ type: 'checkout_pr_status_request', requestId: 'r1', cwd: '/repo' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'checkout_pr_status_response')
+  assert.match(String((payload.error as Record<string, unknown>).message), /no GitHub origin/)
+})
