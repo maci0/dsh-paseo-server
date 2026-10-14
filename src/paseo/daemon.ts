@@ -15,6 +15,7 @@ import {
 } from './file-transfer.ts'
 import { createDownloadGrant, discardUpload, finishUpload, appendUpload, mediaTypeOf, startUpload } from '../dsh/files.ts'
 import { listPrompts, queryDirectory, searchTimeline } from './directory.ts'
+import type { LabelDefinition } from '../dsh/labels.ts'
 import type { DirectoryFilter, DirectoryPage, DirectorySort } from './directory.ts'
 import { resolve } from 'node:path'
 import type { DownloadGrant, UploadTarget } from '../dsh/files.ts'
@@ -70,6 +71,17 @@ import {
   stashEntries,
   checkoutPrStatusResponse,
   agentHistory,
+  emptyUsage,
+  labelAffected,
+  projectIconForDirectory,
+  projectIconGot,
+  projectIconSet,
+  projectRenamed,
+  projectUpdated,
+  labelAssigned,
+  labelCatalog,
+  labelUpdated,
+  labelUpdateEvent,
   commandList,
   subagentTimeline,
   workspaceSetupStarted,
@@ -1220,6 +1232,14 @@ export class PaseoDaemon {
           reply(commandList(requestId, agentId, await this.options.bridge.listCommands(agentId)))
           return
         }
+        case 'provider.usage.list.request':
+        case 'usage.list_reports.request': {
+          reply(emptyUsage(
+            type === 'provider.usage.list.request' ? 'provider.usage.list.response' : 'usage.list_reports.response',
+            requestId,
+          ))
+          return
+        }
         case 'diagnostics.request': {
           const [agents, workspaces] = await Promise.all([
             this.options.bridge.listAgents(),
@@ -1594,6 +1614,60 @@ export class PaseoDaemon {
           }
           return
         }
+        case 'project.rename.request': {
+          const projectId = stringField(message, 'projectId')
+          if (projectId === undefined) {
+            reply(projectRenamed(requestId, '', null, 'projectId is required'))
+            return
+          }
+          const customName = message.customName === null ? null : stringField(message, 'customName') ?? null
+          const result = await this.options.bridge.setProjectName(projectId, customName)
+          reply(projectRenamed(requestId, projectId, result.customName, null))
+          const workspaces = await this.options.bridge.workspacesOfProject(projectId)
+          for (const workspace of workspaces) this.broadcast(projectUpdated(workspace))
+          return
+        }
+        case 'project.icon.set.request': {
+          const projectId = stringField(message, 'projectId')
+          const source = recordValue(message.source)
+          if (projectId === undefined || source === undefined) {
+            reply(projectIconSet(requestId, projectId ?? '', false, 'projectId and source are required'))
+            return
+          }
+          const type = stringField(source, 'type')
+          const data = stringField(source, 'data')
+          if (type === 'upload' && data !== undefined) {
+            await this.options.bridge.setProjectIcon(projectId, { data, mimeType: iconMediaType(data) })
+          } else {
+            // "Automatic" clears the stored icon: this daemon has no icon
+            // discovery to fall back to, and saying so beats a stale image.
+            await this.options.bridge.setProjectIcon(projectId, null)
+          }
+          reply(projectIconSet(requestId, projectId, true, null))
+          const workspaces = await this.options.bridge.workspacesOfProject(projectId)
+          for (const workspace of workspaces) this.broadcast(projectUpdated(workspace))
+          return
+        }
+        case 'project.icon.get.request': {
+          const projectId = stringField(message, 'projectId') ?? ''
+          reply(projectIconGot(requestId, projectId, await this.options.bridge.projectIcon(projectId)))
+          return
+        }
+        case 'project_icon_request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(projectIconForDirectory(requestId, '', null, 'cwd is required'))
+            return
+          }
+          const projectId = await this.options.bridge.projectIdForDirectory(directory)
+          reply(projectIconForDirectory(
+            requestId,
+            directory,
+            projectId === null ? null : await this.options.bridge.projectIcon(projectId),
+            null,
+          ))
+          return
+        }
         case 'project.remove.request': {
           const projectId = stringField(message, 'projectId')
           if (projectId === undefined) {
@@ -1660,6 +1734,64 @@ export class PaseoDaemon {
             return
           }
           reply(projectConfigWritten(requestId, repoRoot, message.config, written.revision))
+          return
+        }
+        case 'workspace.label.list.request': {
+          const catalog = await this.options.bridge.listWorkspaceLabels()
+          const subscribe = recordValue(message.subscribe)
+          const subscriptionId = subscribe === undefined ? undefined : stringField(subscribe, 'subscriptionId')
+          reply(labelCatalog(requestId, catalog.labels, catalog.generation, catalog.headSeq, subscriptionId))
+          return
+        }
+        case 'workspace.label.update.request': {
+          const name = stringField(message, 'name')
+          if (name === undefined) {
+            reply(rpcError(requestId, type, 'name is required', 'invalid_request'))
+            return
+          }
+          const result = await this.options.bridge.updateWorkspaceLabel({
+            name,
+            ...(stringField(message, 'newName') === undefined ? {} : { newName: stringField(message, 'newName') }),
+            ...(stringField(message, 'color') === undefined ? {} : { color: stringField(message, 'color') }),
+          })
+          reply(labelUpdated(requestId, result.label, result.affectedWorkspaceCount))
+          this.broadcast(labelUpdateEvent(result.label, []))
+          return
+        }
+        case 'workspace.label.delete.request': {
+          const name = stringField(message, 'name')
+          if (name === undefined) {
+            reply(rpcError(requestId, type, 'name is required', 'invalid_request'))
+            return
+          }
+          const removed = await this.options.bridge.deleteWorkspaceLabel(name)
+          reply(labelAffected('workspace.label.delete.response', requestId, removed.affectedWorkspaceCount))
+          return
+        }
+        case 'workspace.label.delete.inspect.request': {
+          const name = stringField(message, 'name')
+          if (name === undefined) {
+            reply(rpcError(requestId, type, 'name is required', 'invalid_request'))
+            return
+          }
+          const inspected = await this.options.bridge.inspectWorkspaceLabelDelete(name)
+          reply(labelAffected('workspace.label.delete.inspect.response', requestId, inspected.affectedWorkspaceCount))
+          return
+        }
+        case 'workspace.label.assignment.set.request': {
+          const workspaceId = stringField(message, 'workspaceId')
+          const definition = recordValue(message.label)
+          const name = definition === undefined ? undefined : stringField(definition, 'name')
+          if (workspaceId === undefined || name === undefined) {
+            reply(rpcError(requestId, type, 'workspaceId and label are required', 'invalid_request'))
+            return
+          }
+          const color = definition === undefined ? undefined : stringField(definition, 'color')
+          const label: LabelDefinition = { name, color: (color ?? 'sky') as LabelDefinition['color'] }
+          const result = await this.options.bridge.setWorkspaceLabelAssignment(workspaceId, label, message.assigned !== false)
+          reply(labelAssigned(requestId, label, result.workspaceLabels))
+          this.broadcast(labelUpdateEvent(label, result.workspaceLabels))
+          this.broadcast(workspaceUpdate(await this.requireWorkspace(workspaceId)))
           return
         }
         case 'archive_workspace_request': {
@@ -1898,6 +2030,17 @@ export class PaseoDaemon {
     const workspaces = await this.options.bridge.listWorkspaces()
     this.cacheWorkspaces(workspaces)
     return workspaces[0]?.directory ?? process.cwd()
+  }
+
+  /** One workspace record by identity, or a refresh of the cache. */
+  private async requireWorkspace(workspaceId: string): Promise<WorkspaceRecord> {
+    const cached = await this.workspaceFor(workspaceId)
+    if (cached !== undefined) return cached
+    const listed = await this.options.bridge.listWorkspaces()
+    this.cacheWorkspaces(listed)
+    const found = this.workspaceCache.get(workspaceId)
+    if (found === undefined) throw new Error(`unknown workspace ${workspaceId}`)
+    return found
   }
 
   /** Workspace identity for one directory this daemon advertised. */
@@ -2266,4 +2409,13 @@ function directoryPage(value: Record<string, unknown>): DirectoryPage {
   const limit = typeof value.limit === 'number' && value.limit > 0 ? value.limit : 50
   const cursor = stringField(value, 'cursor')
   return { limit, ...(cursor === undefined ? {} : { cursor }) }
+}
+
+/** Media type of an uploaded icon, read from its own bytes. */
+function iconMediaType(data: string): string {
+  if (data.startsWith('iVBOR')) return 'image/png'
+  if (data.startsWith('/9j/')) return 'image/jpeg'
+  if (data.startsWith('R0lGOD')) return 'image/gif'
+  if (data.startsWith('UklGR')) return 'image/webp'
+  return 'image/png'
 }

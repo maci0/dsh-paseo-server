@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.15.1
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.16.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -84,9 +84,9 @@ timeline reads, prompt send with image attachments, interrupt, archive, the
 checkout status, diff, commit, push, and pull, terminals over the binary
 stream protocol, workspace scripts as background jobs, reminders, pull
 request facts, agent model selection, the subagent listing and fork-context
-attachment, the file explorer with writes, uploads and downloads, project
-config, path suggestions, git worktrees, provider and model catalogs, and the
-pairing card with its QR.
+attachment, the file explorer with writes, uploads and downloads, workspace
+labels, project names and icons, project config, path suggestions, git
+worktrees, provider and model catalogs, and the pairing card with its QR.
 
 A full turn was driven end to end: `paseo run --provider <p>/<m>` created a DSH
 session, the harness ran the model call, and the client read the reply back from
@@ -100,10 +100,15 @@ Every persisted session is an agent too, not only the ones live in the running
 process. A session the harness is not holding shows as idle, its transcript
 still reads, and prompting it resumes the session and runs the turn.
 
+The pairing QR renders twice: on the plugin's Plugins row, and as a Paseo tab
+in Settings > Plugins, which is the page a plugin's own settings belong on.
+
+Workspace labels and project names and icons are stored under the harness home
+and carried in the descriptors a client sidebar groups by.
+
 Refused on purpose, always with the reason a client shows: Paseo's cloud
-execution hub, its plugin catalog, provider usage reports, workspace labels,
-project icons, workspace recovery, agent rewind, and daemon restart or
-shutdown, because a phone should not stop the harness it drives.
+execution hub, its plugin catalog, workspace recovery, agent rewind, and daemon
+restart or shutdown, because a phone should not stop the harness it drives.
 
 Where the models disagree, the mapping says so. A one-shot reminder has no
 Paseo cadence and is listed as a cron of its own instant with `maxRuns: 1` and

@@ -90,6 +90,19 @@ import type {
   UploadTarget,
   WriteOutcome,
 } from './files.ts'
+import {
+  EMPTY_LABELS,
+  applyAssignment,
+  applyLabelDelete,
+  applyLabelUpdate,
+  labelsOf,
+  loadLabels,
+  loadProjects,
+  normalizeLabelName,
+  saveLabels,
+  saveProjects,
+} from './labels.ts'
+import type { LabelDefinition, LabelState, ProjectPresentation, ProjectState } from './labels.ts'
 import { loadPausedReminders, savePausedReminders } from './paused-reminders.ts'
 import type { PausedReminder } from './paused-reminders.ts'
 import { fromPaseoCadence, toPaseoCadence } from './schedules.ts'
@@ -175,6 +188,12 @@ class DshBridge implements PaseoBridge {
   /** Client-minted prompt identities awaiting their user/message event, oldest first. */
   /** Owning session and writable attachment of every terminal this daemon saw. */
   /** Running script jobs, keyed by workspace and script name. */
+  /** Label catalog, read lazily from its own store. */
+  private labelCache: LabelState | null = null
+
+  /** Operator project names and icons, read lazily from their own store. */
+  private projectCache: ProjectState | null = null
+
   /** Workspaces whose declared setup command this daemon started. */
   private readonly setupJobs = new Set<string>()
 
@@ -240,6 +259,11 @@ class DshBridge implements PaseoBridge {
   }
 
   async listWorkspaces(): Promise<readonly WorkspaceRecord[]> {
+    // A descriptor carries its labels and its operator name, so both stores are
+    // read before any record is built rather than lazily behind the first
+    // request that happens to need them.
+    await this.labelState()
+    await this.projectState()
     const registry = this.ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
     const records = new Map<string, WorkspaceRecord>()
     if (registry !== undefined) {
@@ -397,6 +421,85 @@ class DshBridge implements PaseoBridge {
     }
   }
 
+  /** Label catalog, read once and then kept in memory. */
+  async listWorkspaceLabels(): Promise<{
+    readonly labels: readonly LabelDefinition[]
+    readonly generation: string
+    readonly headSeq: number
+  }> {
+    const state = await this.labelState()
+    return { labels: state.labels, generation: state.generation, headSeq: state.seq }
+  }
+
+  /** Create or edit one label. */
+  async updateWorkspaceLabel(input: {
+    readonly name: string
+    readonly newName?: string
+    readonly color?: string
+  }): Promise<{ readonly label: LabelDefinition; readonly affectedWorkspaceCount: number }> {
+    const state = await this.labelState()
+    const result = applyLabelUpdate(state, {
+      name: input.name,
+      ...(input.newName === undefined ? {} : { newName: input.newName }),
+      ...(input.color === undefined ? {} : { color: input.color as LabelDefinition['color'] }),
+    })
+    await this.saveLabelState(result.state)
+    return { label: result.label, affectedWorkspaceCount: result.affected }
+  }
+
+  /** Remove one label and its assignments. */
+  async deleteWorkspaceLabel(name: string): Promise<{ readonly affectedWorkspaceCount: number }> {
+    const state = await this.labelState()
+    const result = applyLabelDelete(state, name)
+    await this.saveLabelState(result.state)
+    return { affectedWorkspaceCount: result.affected }
+  }
+
+  /** Count the workspaces that carry one label. */
+  async inspectWorkspaceLabelDelete(name: string): Promise<{ readonly affectedWorkspaceCount: number }> {
+    const state = await this.labelState()
+    const target = normalizeLabelName(name)
+    return {
+      affectedWorkspaceCount: Object.values(state.assignments)
+        .filter((names) => names.includes(target)).length,
+    }
+  }
+
+  /** Assign or clear one label on one workspace. */
+  async setWorkspaceLabelAssignment(
+    workspaceId: string,
+    label: LabelDefinition,
+    assigned: boolean,
+  ): Promise<{ readonly workspaceLabels: readonly string[] }> {
+    const state = await this.labelState()
+    const result = applyAssignment(state, workspaceId, label, assigned)
+    await this.saveLabelState(result.state)
+    // The cached descriptor was built before this assignment, so it is dropped
+    // and rebuilt on the next read with the new labels on it.
+    this.workspaceCache.delete(workspaceId)
+    return { workspaceLabels: result.workspaceLabels }
+  }
+
+  /** Labels of one workspace, for its descriptor. */
+  private labelsFor(workspaceId: string): readonly string[] {
+    return labelsOf(this.labelCache ?? EMPTY_LABELS, workspaceId)
+  }
+
+  /** Cached label state, read from the store on first use. */
+  private async labelState(): Promise<LabelState> {
+    if (this.labelCache !== null) return this.labelCache
+    const home = this.homePath()
+    this.labelCache = home === undefined ? EMPTY_LABELS : await loadLabels(home)
+    return this.labelCache
+  }
+
+  private async saveLabelState(state: LabelState): Promise<void> {
+    this.labelCache = state
+    const home = this.homePath()
+    if (home === undefined) return
+    await saveLabels(home, state)
+  }
+
   /** Worktrees of one repository. */
   async listWorktrees(directory: string): Promise<readonly WorktreeEntry[]> {
     return listWorktrees(directory)
@@ -521,6 +624,59 @@ class DshBridge implements PaseoBridge {
       }
     }
     return { text: lines.join('\n'), itemCount, boundaryMessageId: boundary }
+  }
+
+  /** Set or clear one project's operator name. */
+  async setProjectName(projectId: string, customName: string | null): Promise<{ readonly customName: string | null }> {
+    const state = await this.projectState()
+    const trimmed = customName === null ? '' : customName.trim()
+    const entry = state[projectId] ?? {}
+    const next: ProjectPresentation = { ...entry }
+    delete (next as { customName?: string }).customName
+    const updated = trimmed.length === 0
+      ? Object.keys(next).length === 0 ? state : { ...state, [projectId]: next }
+      : { ...state, [projectId]: { ...next, customName: trimmed } }
+    await this.saveProjectState(updated)
+    return { customName: trimmed.length === 0 ? null : trimmed }
+  }
+
+  /** Store or clear one project's icon. */
+  async setProjectIcon(projectId: string, icon: { readonly data: string; readonly mimeType: string } | null): Promise<void> {
+    const state = await this.projectState()
+    const entry = state[projectId] ?? {}
+    const next: ProjectPresentation = { ...entry }
+    delete (next as { icon?: { data: string; mimeType: string } }).icon
+    const updated = icon === null
+      ? Object.keys(next).length === 0 ? state : { ...state, [projectId]: next }
+      : { ...state, [projectId]: { ...next, icon } }
+    await this.saveProjectState(updated)
+  }
+
+  /** Read one project's icon. */
+  async projectIcon(projectId: string): Promise<{ readonly data: string; readonly mimeType: string } | null> {
+    const state = await this.projectState()
+    return state[projectId]?.icon ?? null
+  }
+
+  /** Project identity one directory belongs to. */
+  async projectIdForDirectory(directory: string): Promise<string | null> {
+    const workspace = (await this.listWorkspaces()).find((candidate) => candidate.directory === directory)
+    return workspace?.projectId ?? null
+  }
+
+  /** Project presentation state, read lazily from its own store. */
+  private async projectState(): Promise<ProjectState> {
+    if (this.projectCache !== null) return this.projectCache
+    const home = this.homePath()
+    this.projectCache = home === undefined ? {} : await loadProjects(home)
+    return this.projectCache
+  }
+
+  private async saveProjectState(state: ProjectState): Promise<void> {
+    this.projectCache = state
+    const home = this.homePath()
+    if (home === undefined) return
+    await saveProjects(home, state)
   }
 
   /** Workspaces whose derived project identity is one id. */
@@ -1548,10 +1704,14 @@ class DshBridge implements PaseoBridge {
       id: workspace.id,
       projectId: `prj_${digest(projectRootPath)}`,
       projectKey: projectRootPath,
-      projectName: basenameOf(projectRootPath),
+      projectName: this.projectCache?.[`prj_${digest(projectRootPath)}`]?.customName ?? basenameOf(projectRootPath),
+      ...(this.projectCache?.[`prj_${digest(projectRootPath)}`]?.customName === undefined
+        ? {}
+        : { customProjectName: this.projectCache[`prj_${digest(projectRootPath)}`]?.customName }),
       projectRootPath,
       projectKind: 'directory',
       name,
+      labels: this.labelsFor(workspace.id),
       directory,
       status: workspaceStatus(agentStatuses),
       statusEnteredAt: updatedAt,

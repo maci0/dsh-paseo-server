@@ -35,6 +35,7 @@ const workspace: WorkspaceRecord = {
   projectRootPath: '/repo',
   projectKind: 'git',
   name: 'repo',
+  labels: [],
   directory: '/repo',
   status: 'running',
   statusEnteredAt: null,

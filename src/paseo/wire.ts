@@ -20,6 +20,7 @@ import type {
 } from '../dsh/forge.ts'
 import type { BranchEntry, CommitEntry, DiffFile, GitStatus, StashEntry, WorktreeEntry } from '../dsh/git.ts'
 import type { PromptPreview, SearchLocation } from './directory.ts'
+import type { LabelDefinition } from '../dsh/labels.ts'
 import type {
   AgentRecord,
   AgentStatus,
@@ -98,6 +99,10 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'archive_workspace_request',
   'project.add.request',
   'project.remove.request',
+  'project.rename.request',
+  'project.icon.get.request',
+  'project.icon.set.request',
+  'project_icon_request',
   'directory_suggestions_request',
   'read_project_config_request',
   'agent.provider_subagents.list.request',
@@ -111,6 +116,8 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'fetch_agent_history_request',
   'list_commands_request',
   'diagnostics.request',
+  'provider.usage.list.request',
+  'usage.list_reports.request',
   'get_daemon_config_request',
   'project.create_directory.request',
   'project.github.clone.request',
@@ -336,6 +343,7 @@ export function workspaceDescriptor(workspace: WorkspaceRecord): Record<string, 
     id: workspace.id,
     projectId: workspace.projectId,
     projectDisplayName: workspace.projectName,
+    projectCustomName: workspace.customProjectName ?? null,
     projectRootPath: workspace.projectRootPath,
     workspaceDirectory: workspace.directory,
     projectKind: workspace.projectKind,
@@ -343,7 +351,7 @@ export function workspaceDescriptor(workspace: WorkspaceRecord): Record<string, 
     name: workspace.name,
     title: workspace.name,
     pinnedAt: null,
-    labels: [],
+    labels: [...workspace.labels],
     archivingAt: null,
     status: workspace.status,
     statusEnteredAt: workspace.statusEnteredAt,
@@ -374,7 +382,7 @@ export function projectDescriptor(workspace: WorkspaceRecord): Record<string, un
     projectId: workspace.projectId,
     projectKey: workspace.projectKey,
     projectDisplayName: workspace.projectName,
-    projectCustomName: null,
+    projectCustomName: workspace.customProjectName ?? null,
     projectRootPath: workspace.projectRootPath,
     projectKind: workspace.projectKind,
   }
@@ -1893,18 +1901,11 @@ export const REFUSED_REQUESTS: Readonly<Record<string, { readonly response: stri
   'capture_terminal_request': { response: 'capture_terminal_response', reason: 'attach to the terminal and read its stream instead' },
   'workspace.recovery.inspect.request': { response: 'workspace.recovery.inspect.response', reason: 'this daemon keeps no worktree recovery journal' },
   'workspace.recovery.restore.request': { response: 'workspace.recovery.restore.response', reason: 'this daemon keeps no worktree recovery journal' },
-  'workspace.label.list.request': { response: 'workspace.label.list.response', reason: 'this daemon keeps no workspace labels' },
-  'workspace.label.update.request': { response: 'workspace.label.update.response', reason: 'this daemon keeps no workspace labels' },
-  'workspace.label.delete.request': { response: 'workspace.label.delete.response', reason: 'this daemon keeps no workspace labels' },
-  'workspace.label.delete.inspect.request': { response: 'workspace.label.delete.inspect.response', reason: 'this daemon keeps no workspace labels' },
-  'workspace.label.assignment.set.request': { response: 'workspace.label.assignment.set.response', reason: 'this daemon keeps no workspace labels' },
-  'project.rename.request': { response: 'project.rename.response', reason: 'a workspace title is fixed when the workspace is created' },
-  'project.icon.get.request': { response: 'project.icon.get.response', reason: 'this daemon stores no project icons' },
-  'project.icon.set.request': { response: 'project.icon.set.response', reason: 'this daemon stores no project icons' },
-  'project_icon_request': { response: 'project_icon_response', reason: 'this daemon stores no project icons' },
+
+
+
+
   'open_project_request': { response: 'open_project_response', reason: 'opening a project is a client action; this daemon only serves it' },
-  'provider.usage.list.request': { response: 'provider.usage.list.response', reason: 'this daemon keeps no provider usage ledger; read token usage from the harness' },
-  'usage.list_reports.request': { response: 'usage.list_reports.response', reason: 'this daemon keeps no usage reports' },
   'provider_diagnostic_request': { response: 'provider_diagnostic_response', reason: 'provider diagnostics belong to the harness LLM composition' },
   'voice_input_state': { response: 'voice_input_state', reason: 'this daemon has no voice input' },
   'browser.host.register.request': { response: 'browser.host.register.response', reason: 'this daemon hosts no browser' },
@@ -1977,4 +1978,137 @@ export function forgeSearch(
 /** `refresh_providers_snapshot_response`, which acknowledges a re-read. */
 export function providersSnapshotRefreshed(requestId: string, acknowledged: boolean): Record<string, unknown> {
   return { type: 'refresh_providers_snapshot_response', payload: { requestId, acknowledged } }
+}
+
+/**
+ * `provider.usage.list.response` and `usage.list_reports.response`.
+ *
+ * Both surfaces report a provider account's own quota, which Paseo reads from
+ * the provider CLIs. This daemon has no such source: the harness token meter
+ * measures the requests it made, not what the account has left. An empty
+ * report says that, where an error would read as a failed call.
+ */
+export function emptyUsage(
+  type: 'provider.usage.list.response' | 'usage.list_reports.response',
+  requestId: string,
+): Record<string, unknown> {
+  return type === 'provider.usage.list.response'
+    ? { type, payload: { requestId, fetchedAt: new Date().toISOString(), providers: [], error: null } }
+    : { type, payload: { requestId, error: null } }
+}
+
+/** `workspace.label.list.response`. */
+export function labelCatalog(
+  requestId: string,
+  labels: readonly LabelDefinition[],
+  generation: string,
+  headSeq: number,
+  subscriptionId?: string,
+): Record<string, unknown> {
+  return {
+    type: 'workspace.label.list.response',
+    payload: {
+      requestId,
+      ...(subscriptionId === undefined ? {} : { subscriptionId }),
+      labels: labels.map((label) => ({ ...label })),
+      sync: { mode: 'snapshot', generation, headSeq, removals: [] },
+    },
+  }
+}
+
+/** `workspace.label.update.response`. */
+export function labelUpdated(
+  requestId: string,
+  label: LabelDefinition,
+  affectedWorkspaceCount: number,
+): Record<string, unknown> {
+  return {
+    type: 'workspace.label.update.response',
+    payload: { requestId, label: { ...label }, affectedWorkspaceCount },
+  }
+}
+
+/** `workspace.label.delete.response` and its inspect sibling. */
+export function labelAffected(
+  type: 'workspace.label.delete.response' | 'workspace.label.delete.inspect.response',
+  requestId: string,
+  affectedWorkspaceCount: number,
+): Record<string, unknown> {
+  return { type, payload: { requestId, affectedWorkspaceCount } }
+}
+
+/** `workspace.label.assignment.set.response`. */
+export function labelAssigned(
+  requestId: string,
+  label: LabelDefinition,
+  workspaceLabels: readonly string[],
+): Record<string, unknown> {
+  return {
+    type: 'workspace.label.assignment.set.response',
+    payload: { requestId, label: { ...label }, workspaceLabels: [...workspaceLabels] },
+  }
+}
+
+/** `workspace.label.update`, the push half of the catalog. */
+export function labelUpdateEvent(
+  label: LabelDefinition,
+  workspaceLabels: readonly string[],
+  subscriptionId?: string,
+): Record<string, unknown> {
+  return {
+    type: 'workspace.label.update',
+    payload: {
+      ...(subscriptionId === undefined ? {} : { subscriptionId }),
+      kind: 'upsert',
+      label: { ...label },
+      workspaceLabels: [...workspaceLabels],
+    },
+  }
+}
+
+/** `project.rename.response`. */
+export function projectRenamed(
+  requestId: string,
+  projectId: string,
+  customName: string | null,
+  error: string | null,
+): Record<string, unknown> {
+  return { type: 'project.rename.response', payload: { requestId, projectId, accepted: error === null, customName, error } }
+}
+
+/** `project.icon.set.response`. */
+export function projectIconSet(
+  requestId: string,
+  projectId: string,
+  accepted: boolean,
+  error: string | null,
+): Record<string, unknown> {
+  return { type: 'project.icon.set.response', payload: { requestId, projectId, accepted, error } }
+}
+
+/** `project.icon.get.response`. */
+export function projectIconGot(
+  requestId: string,
+  projectId: string,
+  icon: { readonly data: string; readonly mimeType: string } | null,
+): Record<string, unknown> {
+  return { type: 'project.icon.get.response', payload: { requestId, projectId, icon, error: null } }
+}
+
+/** `project_icon_response`, which answers for a directory. */
+export function projectIconForDirectory(
+  requestId: string,
+  directory: string,
+  icon: { readonly data: string; readonly mimeType: string } | null,
+  error: string | null,
+): Record<string, unknown> {
+  return { type: 'project_icon_response', payload: { requestId, cwd: directory, icon, error } }
+}
+
+/** `project.update`, the push half of a rename or icon change. */
+export function projectUpdated(workspace: WorkspaceRecord): Record<string, unknown> {
+  return {
+    type: 'project.update',
+    payload: { kind: 'upsert', project: placement(workspace) },
+  }
 }

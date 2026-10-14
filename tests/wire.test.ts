@@ -20,6 +20,7 @@ const workspace: WorkspaceRecord = {
   projectRootPath: '/repo',
   projectKind: 'directory',
   name: 'repo',
+  labels: [],
   directory: '/repo',
   status: 'done',
   statusEnteredAt: null,

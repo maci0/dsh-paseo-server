@@ -11,6 +11,7 @@ import type { DirectoryEntry, FileContent, WriteOutcome } from '../dsh/files.ts'
 import type { CheckDetails, ForgeHit, ForgeWriteResult, PullRequestLookup, PullRequestTimelineItem, RepositoryHit } from '../dsh/forge.ts';
 import type { BranchEntry, CommitEntry, DiffFile, GitStatus, StashEntry, WorktreeEntry } from '../dsh/git.ts';
 import type { PromptPreview, SearchLocation } from './directory.ts';
+import type { LabelDefinition } from '../dsh/labels.ts';
 import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord, ScheduleRecord, WorkspaceScriptRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
 export declare const PASEO_PROTOCOL_VERSION = 1;
@@ -382,3 +383,38 @@ export declare function repositorySearch(requestId: string, repositories: readon
 export declare function forgeSearch(type: 'forge.search.response' | 'github_search_response', requestId: string, items: readonly ForgeHit[], error: string | null, authenticated: boolean): Record<string, unknown>;
 /** `refresh_providers_snapshot_response`, which acknowledges a re-read. */
 export declare function providersSnapshotRefreshed(requestId: string, acknowledged: boolean): Record<string, unknown>;
+/**
+ * `provider.usage.list.response` and `usage.list_reports.response`.
+ *
+ * Both surfaces report a provider account's own quota, which Paseo reads from
+ * the provider CLIs. This daemon has no such source: the harness token meter
+ * measures the requests it made, not what the account has left. An empty
+ * report says that, where an error would read as a failed call.
+ */
+export declare function emptyUsage(type: 'provider.usage.list.response' | 'usage.list_reports.response', requestId: string): Record<string, unknown>;
+/** `workspace.label.list.response`. */
+export declare function labelCatalog(requestId: string, labels: readonly LabelDefinition[], generation: string, headSeq: number, subscriptionId?: string): Record<string, unknown>;
+/** `workspace.label.update.response`. */
+export declare function labelUpdated(requestId: string, label: LabelDefinition, affectedWorkspaceCount: number): Record<string, unknown>;
+/** `workspace.label.delete.response` and its inspect sibling. */
+export declare function labelAffected(type: 'workspace.label.delete.response' | 'workspace.label.delete.inspect.response', requestId: string, affectedWorkspaceCount: number): Record<string, unknown>;
+/** `workspace.label.assignment.set.response`. */
+export declare function labelAssigned(requestId: string, label: LabelDefinition, workspaceLabels: readonly string[]): Record<string, unknown>;
+/** `workspace.label.update`, the push half of the catalog. */
+export declare function labelUpdateEvent(label: LabelDefinition, workspaceLabels: readonly string[], subscriptionId?: string): Record<string, unknown>;
+/** `project.rename.response`. */
+export declare function projectRenamed(requestId: string, projectId: string, customName: string | null, error: string | null): Record<string, unknown>;
+/** `project.icon.set.response`. */
+export declare function projectIconSet(requestId: string, projectId: string, accepted: boolean, error: string | null): Record<string, unknown>;
+/** `project.icon.get.response`. */
+export declare function projectIconGot(requestId: string, projectId: string, icon: {
+    readonly data: string;
+    readonly mimeType: string;
+} | null): Record<string, unknown>;
+/** `project_icon_response`, which answers for a directory. */
+export declare function projectIconForDirectory(requestId: string, directory: string, icon: {
+    readonly data: string;
+    readonly mimeType: string;
+} | null, error: string | null): Record<string, unknown>;
+/** `project.update`, the push half of a rename or icon change. */
+export declare function projectUpdated(workspace: WorkspaceRecord): Record<string, unknown>;

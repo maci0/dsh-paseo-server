@@ -118,6 +118,8 @@ export declare class PaseoDaemon {
     private runCheckoutOperation;
     /** A directory to resolve a relative suggestion against: the newest workspace. */
     private defaultDirectory;
+    /** One workspace record by identity, or a refresh of the cache. */
+    private requireWorkspace;
     /** Workspace identity for one directory this daemon advertised. */
     private workspaceIdForDirectory;
     /** Claim the lowest free stream slot for one terminal on this connection. */

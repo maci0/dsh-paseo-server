@@ -17,6 +17,7 @@ import type {
   WriteOutcome,
 } from './dsh/files.ts'
 import type { WorktreeEntry } from './dsh/git.ts'
+import type { LabelDefinition } from './dsh/labels.ts'
 import type {
   BranchEntry,
   CommitEntry,
@@ -59,9 +60,13 @@ export interface WorkspaceRecord {
   readonly projectId: string
   readonly projectKey: string
   readonly projectName: string
+  /** Operator name for the project, when one was set. */
+  readonly customProjectName?: string
   readonly projectRootPath: string
   readonly projectKind: 'git' | 'non_git' | 'directory'
   readonly name: string
+  /** Label names a client assigned to this workspace. */
+  readonly labels: readonly string[]
   readonly directory: string
   readonly status: WorkspaceStatus
   readonly statusEnteredAt: string | null
@@ -276,6 +281,28 @@ export interface PaseoBridge {
   beginUpload(input: { readonly fileName: string; readonly mimeType: string; readonly size: number }): Promise<UploadTarget>
   /** Remove one workspace record; its Sessions and their logs stay. */
   deleteWorkspace(workspaceId: string): Promise<boolean>
+  /** Label catalog, with a sync cursor the client echoes back. */
+  listWorkspaceLabels(): Promise<{
+    readonly labels: readonly LabelDefinition[]
+    readonly generation: string
+    readonly headSeq: number
+  }>
+  /** Create or edit one label. */
+  updateWorkspaceLabel(input: {
+    readonly name: string
+    readonly newName?: string
+    readonly color?: string
+  }): Promise<{ readonly label: LabelDefinition; readonly affectedWorkspaceCount: number }>
+  /** Remove one label and its assignments. */
+  deleteWorkspaceLabel(name: string): Promise<{ readonly affectedWorkspaceCount: number }>
+  /** How many workspaces carry one label, without removing it. */
+  inspectWorkspaceLabelDelete(name: string): Promise<{ readonly affectedWorkspaceCount: number }>
+  /** Assign or clear one label on one workspace. */
+  setWorkspaceLabelAssignment(
+    workspaceId: string,
+    label: LabelDefinition,
+    assigned: boolean,
+  ): Promise<{ readonly workspaceLabels: readonly string[] }>
   /** Worktrees of one repository. */
   listWorktrees(directory: string): Promise<readonly WorktreeEntry[]>
   /**
@@ -307,6 +334,14 @@ export interface PaseoBridge {
     config: unknown,
     expected: { readonly mtimeMs: number; readonly size: number } | null,
   ): Promise<{ readonly revision: { readonly mtimeMs: number; readonly size: number } } | { readonly error: string }>
+  /** Operator name for one project, or null to clear it. */
+  setProjectName(projectId: string, customName: string | null): Promise<{ readonly customName: string | null }>
+  /** Store or clear one project's icon. */
+  setProjectIcon(projectId: string, icon: { readonly data: string; readonly mimeType: string } | null): Promise<void>
+  /** Read one project's icon. */
+  projectIcon(projectId: string): Promise<{ readonly data: string; readonly mimeType: string } | null>
+  /** Project identity one directory belongs to. */
+  projectIdForDirectory(directory: string): Promise<string | null>
   /** Workspace records whose project is one project identity. */
   workspacesOfProject(projectId: string): Promise<readonly WorkspaceRecord[]>
   /** Install a model on one agent. */

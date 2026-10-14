@@ -26,6 +26,7 @@ function workspace(): WorkspaceRecord {
     projectRootPath: '/repo',
     projectKind: 'directory',
     name: 'repo',
+    labels: [],
     directory: '/repo',
     status: 'done',
     statusEnteredAt: null,
@@ -109,6 +110,15 @@ function fakeBridge() {
     async statEntry() { return { size: 1, modifiedAt: '2026-01-01T00:00:00.000Z' } },
     async beginUpload() { return { id: 'upload_1', fileName: 'a.png', mimeType: 'image/png', path: '/tmp/a.png', expectedSize: 3, received: 0, started: false } },
     async deleteWorkspace() { return true },
+    async setProjectName() { return { customName: null } },
+    async setProjectIcon() {},
+    async projectIcon() { return null },
+    async projectIdForDirectory() { return null },
+    async listWorkspaceLabels() { return { labels: [], generation: 'g1', headSeq: 0 } },
+    async updateWorkspaceLabel() { return { label: { name: 'urgent', color: 'red' as const }, affectedWorkspaceCount: 0 } },
+    async deleteWorkspaceLabel() { return { affectedWorkspaceCount: 0 } },
+    async inspectWorkspaceLabelDelete() { return { affectedWorkspaceCount: 0 } },
+    async setWorkspaceLabelAssignment() { return { workspaceLabels: [] } },
     async listWorktrees() { return [] },
     async createWorktree() { return { error: 'unused' } },
     async removeWorktree() { return { success: true } },
@@ -1077,4 +1087,93 @@ test('a server-to-client message echoed by a client draws no answer', async () =
   client.request({ type: 'assistant_message', agentId: 'ses_1' })
   await client.settle()
   assert.equal(client.sent.length, before)
+})
+
+test('workspace.label.list.request answers with the catalog', async () => {
+  const { bridge } = fakeBridge()
+  const labeling: PaseoBridge = {
+    ...bridge,
+    listWorkspaceLabels: async () => ({ labels: [{ name: 'urgent', color: 'red' }], generation: 'g1', headSeq: 3 }),
+  }
+  const client = connect(makeDaemon(labeling))
+  client.hello()
+  client.request({ type: 'workspace.label.list.request', requestId: 'r1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'workspace.label.list.response')
+  assert.deepEqual(payload.labels, [{ name: 'urgent', color: 'red' }])
+  assert.equal((payload.sync as Record<string, unknown>).headSeq, 3)
+})
+
+test('assigning a label reports the workspace labels', async () => {
+  const { bridge } = fakeBridge()
+  const assigning: PaseoBridge = {
+    ...bridge,
+    setWorkspaceLabelAssignment: async () => ({ workspaceLabels: ['urgent'] }),
+  }
+  const client = connect(makeDaemon(assigning))
+  client.hello()
+  client.request({
+    type: 'workspace.label.assignment.set.request',
+    requestId: 'r1',
+    workspaceId: 'ws_1',
+    label: { name: 'urgent', color: 'red' },
+    assigned: true,
+  })
+  await client.settle()
+  const responses = client.payloads('workspace.label.assignment.set.response')
+  assert.equal(responses.length, 1)
+  assert.deepEqual(responses[0]?.workspaceLabels, ['urgent'])
+})
+
+test('deleting a label reports how many workspaces carried it', async () => {
+  const { bridge } = fakeBridge()
+  const deleting: PaseoBridge = { ...bridge, deleteWorkspaceLabel: async () => ({ affectedWorkspaceCount: 4 }) }
+  const client = connect(makeDaemon(deleting))
+  client.hello()
+  client.request({ type: 'workspace.label.delete.request', requestId: 'r1', name: 'urgent' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'workspace.label.delete.response')
+  assert.equal(payload.affectedWorkspaceCount, 4)
+})
+
+test('project.rename.request reports the name it stored', async () => {
+  const { bridge } = fakeBridge()
+  const renaming: PaseoBridge = { ...bridge, setProjectName: async (_id, name) => ({ customName: name }) }
+  const client = connect(makeDaemon(renaming))
+  client.hello()
+  client.request({ type: 'project.rename.request', requestId: 'r1', projectId: 'prj_1', customName: ' Work ' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'project.rename.response')
+  assert.equal(payload.customName, ' Work ')
+  assert.equal(payload.accepted, true)
+})
+
+test('project.icon.get.request answers with the stored icon', async () => {
+  const { bridge } = fakeBridge()
+  const icon = { data: 'iVBORw0KGgo=', mimeType: 'image/png' }
+  const icons: PaseoBridge = { ...bridge, projectIcon: async () => icon }
+  const client = connect(makeDaemon(icons))
+  client.hello()
+  client.request({ type: 'project.icon.get.request', requestId: 'r1', projectId: 'prj_1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'project.icon.get.response')
+  assert.deepEqual(payload.icon, icon)
+})
+
+test('an automatic icon source clears whatever was stored', async () => {
+  const { bridge } = fakeBridge()
+  const calls: Array<{ id: string; icon: unknown }> = []
+  const icons: PaseoBridge = {
+    ...bridge,
+    setProjectIcon: async (id, value) => { calls.push({ id, icon: value }) },
+  }
+  const client = connect(makeDaemon(icons))
+  client.hello()
+  client.request({ type: 'project.icon.set.request', requestId: 'r1', projectId: 'prj_1', source: { type: 'automatic' } })
+  await client.settle()
+  assert.deepEqual(calls, [{ id: 'prj_1', icon: null }])
 })

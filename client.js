@@ -1,10 +1,11 @@
 /**
  * dsh-paseo-server browser half.
  *
- * One surface: the Paseo card on the Plugins page. It renders the pairing QR
- * and the two pairing strings, so a phone can be pointed at this daemon
- * without a terminal. The QR is an SVG document served by the host half, so
- * the browser half carries no encoder and no QR dependency.
+ * Two surfaces, one component: the Paseo card on a Plugins row, and a Paseo
+ * tab in Settings > Plugins. Both render the pairing QR and the pairing
+ * strings, so a phone can be pointed at this daemon without a terminal. The QR
+ * is an SVG document served by the host half, so the browser half carries no
+ * encoder and no QR dependency.
  *
  * This file is plain JavaScript on purpose. The client module system serves a
  * package's `exports["./client"]` artifact as a lazy-CJS factory registered on
@@ -51,6 +52,11 @@ window.__ModuleLoader__.load({
       relayOff: 'Relay disabled',
       serverId: 'Server id',
       refresh: 'Refresh',
+      tab: 'Paseo',
+      summary: 'Scan the pairing QR, or copy the pairing link into the Paseo app.',
+      open: 'Open in Paseo',
+      download: 'Save QR as SVG',
+      hint: 'The link is a credential: anyone who has it can drive this daemon.',
     }
 
     const zh = {
@@ -70,6 +76,11 @@ window.__ModuleLoader__.load({
       relayOff: '中继已禁用',
       serverId: '服务器 ID',
       refresh: '刷新',
+      tab: 'Paseo',
+      summary: '扫描配对二维码，或将配对链接复制到 Paseo 应用中。',
+      open: '在 Paseo 中打开',
+      download: '下载二维码 SVG',
+      hint: '该链接等同凭据：任何持有它的人都能操控此守护进程。',
     }
 
     /** Inject the card stylesheet once. */
@@ -79,14 +90,18 @@ window.__ModuleLoader__.load({
       style.id = STYLE_ID
       style.textContent = [
         '.dps-card{display:flex;flex-direction:column;gap:12px}',
-        '.dps-row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}',
-        '.dps-qr{width:180px;height:180px;background:#fff;padding:6px;border-radius:8px}',
-        '.dps-meta{display:flex;flex-direction:column;gap:6px;min-width:240px;flex:1}',
+        '.dps-row{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}',
+        '.dps-qr{width:200px;height:200px;background:#fff;padding:8px;border-radius:8px}',
+        '.dps-meta{display:flex;flex-direction:column;gap:8px;min-width:260px;flex:1}',
         '.dps-label{font-size:12px;opacity:.7}',
         '.dps-value{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}',
         '.dps-hint{font-size:12px;opacity:.7}',
-        '.dps-actions{display:flex;gap:8px;flex-wrap:wrap}',
-        '.dps-badge{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid currentColor;opacity:.8}',
+        '.dps-warn{font-size:12px;opacity:.8}',
+        '.dps-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}',
+        '.dps-badge{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid currentColor;opacity:.8;align-self:flex-start;width:auto}',
+        '.dps-action{font:inherit;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer}',
+        '.dps-actions a{font-size:12px}',
+        '.dps-title{font-size:14px;font-weight:600}',
       ].join('')
       document.head.appendChild(style)
     }
@@ -125,9 +140,15 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** The Paseo pairing card. */
+    /**
+     * The Paseo pairing card.
+     *
+     * A Plugins row renders the summary view on its own page, so the same
+     * component answers both without a second implementation.
+     */
     function createCard(t) {
-      return function PaseoCard() {
+      return function PaseoCard(props) {
+        const view = props && props.view === 'summary' ? 'summary' : 'page'
         const [state, setState] = React.useState({ phase: 'loading' })
         const load = React.useCallback(async () => {
           try {
@@ -150,13 +171,17 @@ window.__ModuleLoader__.load({
           return React.createElement('div', { className: 'dps-card' }, t('offline'))
         }
         const info = state.info
+        const qrSrc = QR_ROUTE + '?v=' + encodeURIComponent(info.serverId)
+        if (view === 'summary') {
+          return React.createElement('div', { className: 'dps-hint' }, t('summary'))
+        }
         return React.createElement(
           'div',
           { className: 'dps-card' },
           React.createElement('div', { className: 'dps-row' },
             React.createElement('img', {
               className: 'dps-qr',
-              src: QR_ROUTE + '?v=' + encodeURIComponent(info.serverId),
+              src: qrSrc,
               alt: t('qrAlt'),
             }),
             React.createElement('div', { className: 'dps-meta' },
@@ -180,7 +205,10 @@ window.__ModuleLoader__.load({
               }),
               React.createElement('div', { className: 'dps-actions' },
                 React.createElement('button', { type: 'button', onClick: () => { void load() } }, t('refresh')),
+                React.createElement('a', { href: info.url, target: '_blank', rel: 'noreferrer' }, t('open')),
+                React.createElement('a', { href: qrSrc, download: 'paseo-pairing.svg' }, t('download')),
               ),
+              React.createElement('div', { className: 'dps-warn' }, t('hint')),
             ),
           ),
         )
@@ -188,18 +216,29 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Mount the pairing card.
+     * Mount both pairing surfaces.
      * @param ctx - the browser plugin context.
      */
     function apply(ctx) {
       const t = ctx.locale.bind(LOCALE_NS)
       ctx.effect(() => ctx.locale.register(LOCALE_NS, { en, zh }), 'dsh-paseo-server: locale dictionary')
       const Card = createCard(t)
+
+      // The Plugins row card. `${package}#${rowId}` is the identity the Plugins
+      // page looks up for a row; any other key registers a card nothing renders.
       ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
         name: 'plugins.row.config',
-        // `${package}#${rowId}` is the identity the Plugins page looks up for a
-        // row's card; any other key registers a card nothing ever renders.
         key: '@maci0/dsh-paseo-server#paseo-server',
+        locale: LOCALE_NS,
+      }, Card))
+
+      // The Settings > Plugins tab, which is where a plugin's own settings
+      // live and where the QR is reachable without opening a bundle row.
+      ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+        name: 'settings.plugins.tab',
+        id: 'paseo',
+        order: 20,
+        label: () => t('tab'),
         locale: LOCALE_NS,
       }, Card))
     }
