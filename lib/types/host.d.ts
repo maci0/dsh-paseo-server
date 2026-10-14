@@ -80,12 +80,52 @@ export interface SessionsLike {
 }
 /** Live agent surface. */
 export interface AgentsLike {
-    get(id: string): {
-        readonly id: string;
-    } | undefined;
+    get(id: string): unknown;
     list(): readonly {
         readonly id: string;
     }[];
+}
+/** One retained terminal, as the terminal controller reports it. */
+export interface TerminalInfoLike {
+    readonly id: string;
+    readonly title: string;
+    readonly cwd: string;
+    readonly cols: number;
+    readonly rows: number;
+    readonly state: 'running' | 'exited' | 'failed';
+    readonly exitCode: number | null;
+    readonly error?: string;
+    /** Current writable attachment, when the terminal has one. */
+    readonly controllerId?: string;
+}
+/** One frame of an attached terminal. */
+export type TerminalFrameLike = {
+    readonly type: 'snapshot';
+    readonly sequence: number;
+    readonly screen: string;
+    readonly info: TerminalInfoLike;
+} | {
+    readonly type: 'output';
+    readonly sequence: number;
+    readonly data: string;
+} | {
+    readonly type: 'state';
+    readonly info: TerminalInfoLike;
+};
+/** Browser-terminal surface: an owner-scoped PTY per Session. */
+export interface TerminalControllerLike {
+    list(sessionId: string): readonly TerminalInfoLike[];
+    create(agent: unknown, request: {
+        readonly id: string;
+        readonly cols: number;
+        readonly rows: number;
+        readonly shellPath?: string;
+    }, signal: AbortSignal): Promise<TerminalInfoLike>;
+    follow(agent: unknown, id: string, attachmentId: string, signal: AbortSignal): AsyncIterable<TerminalFrameLike>;
+    write(agent: unknown, id: string, attachmentId: string, data: string): Promise<void>;
+    resize(agent: unknown, id: string, attachmentId: string, cols: number, rows: number): Promise<void>;
+    rename(agent: unknown, id: string, title: string): void;
+    close(agent: unknown, id: string): Promise<void>;
 }
 /** Workspace record surface. */
 export interface WorkspaceLike {

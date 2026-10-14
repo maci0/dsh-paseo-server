@@ -79,12 +79,19 @@ export class DaemonChannel {
    * @param text - plaintext application frame.
    */
   send(text: string): void {
+    this.sendBytes(new TextEncoder().encode(text))
+  }
+
+  /**
+   * Send one raw application frame, which is how terminal stream frames travel.
+   * @param bytes - plaintext frame bytes.
+   */
+  sendBytes(bytes: Uint8Array): void {
     if (this.closed) return
     const key = this.sharedKey
     if (key === undefined) return
-    const plaintext = new TextEncoder().encode(text)
     const nonce = nacl.randomBytes(NONCE_BYTES)
-    const ciphertext = nacl.box.after(plaintext, nonce, key)
+    const ciphertext = nacl.box.after(bytes, nonce, key)
     const bundle = new Uint8Array(NONCE_BYTES + ciphertext.length)
     bundle.set(nonce, 0)
     bundle.set(ciphertext, NONCE_BYTES)

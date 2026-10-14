@@ -8,6 +8,8 @@
 export interface WireSocket {
     /** Send one text frame. */
     send(text: string): void;
+    /** Send one binary frame, when the transport carries them. */
+    sendBinary?(bytes: Uint8Array): void;
     /** Close with a WebSocket code and reason. */
     close(code: number, reason: string): void;
     /** Remove every listener; called once the session is disposed. */
@@ -17,6 +19,8 @@ export interface WireSocket {
 export interface WireSocketEvents {
     /** One text frame arrived. */
     message(text: string): void;
+    /** One binary frame arrived, which carries terminal stream frames. */
+    binary?(bytes: Uint8Array): void;
     /** The peer closed. */
     close(): void;
 }

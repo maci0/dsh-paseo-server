@@ -87,6 +87,26 @@ export interface TimelineEntry {
   readonly turnId?: string
 }
 
+/** One terminal a Paseo client can attach to. */
+export interface TerminalRecord {
+  readonly id: string
+  /** Session whose agent owns the PTY; Paseo has no equivalent and never sees it. */
+  readonly sessionId: string
+  readonly workspaceId: string
+  readonly title: string
+  readonly cwd: string
+  readonly cols: number
+  readonly rows: number
+  readonly state: 'running' | 'exited' | 'failed'
+  readonly exitCode: number | null
+}
+
+/** One thing that happened to an attached terminal. */
+export type TerminalEvent =
+  | { readonly type: 'snapshot'; readonly screen: string }
+  | { readonly type: 'output'; readonly data: string }
+  | { readonly type: 'state'; readonly record: TerminalRecord }
+
 /** One prompt a client submitted: text, images, or both. */
 export interface PromptInput {
   readonly text: string
@@ -156,6 +176,32 @@ export interface PaseoBridge {
   cancelAgent(agentId: string): Promise<void>
   /** Create a workspace over a directory. */
   createWorkspace(input: { readonly directory: string; readonly name?: string }): Promise<WorkspaceRecord>
+  /** Terminals this runtime currently retains. */
+  listTerminals(): Promise<readonly TerminalRecord[]>
+  /** Allocate one terminal inside a workspace and return its descriptor. */
+  createTerminal(input: {
+    /** Workspace to open the shell in; its directory becomes the shell's cwd. */
+    readonly workspaceId: string
+    readonly name?: string
+    /** Initial size; a client that sends none gets the pocket default. */
+    readonly cols?: number
+    readonly rows?: number
+  }): Promise<TerminalRecord>
+  /**
+   * Attach to one terminal and stream what happens to it.
+   * @param terminalId - terminal to attach.
+   * @param listener - receives every frame until the returned disposer runs.
+   * @returns a disposer that detaches the stream.
+   */
+  followTerminal(terminalId: string, listener: (event: TerminalEvent) => void): Promise<Disposable>
+  /** Deliver input bytes to one terminal. */
+  writeTerminal(terminalId: string, data: string): Promise<void>
+  /** Resize one terminal's PTY. */
+  resizeTerminal(terminalId: string, cols: number, rows: number): Promise<void>
+  /** Rename one terminal. */
+  renameTerminal(terminalId: string, title: string): Promise<void>
+  /** Close one terminal and kill its process. */
+  closeTerminal(terminalId: string): Promise<void>
   /** Archive a workspace and its agents. */
   archiveWorkspace(workspaceId: string): Promise<void>
   /** Subscribe to live agent, workspace, and timeline events. */

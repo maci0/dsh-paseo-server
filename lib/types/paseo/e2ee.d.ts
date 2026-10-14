@@ -49,6 +49,11 @@ export declare class DaemonChannel {
      * @param text - plaintext application frame.
      */
     send(text: string): void;
+    /**
+     * Send one raw application frame, which is how terminal stream frames travel.
+     * @param bytes - plaintext frame bytes.
+     */
+    sendBytes(bytes: Uint8Array): void;
     /** Close the underlying socket. */
     close(code: number, reason: string): void;
     /** Mark the channel closed without touching the socket. */

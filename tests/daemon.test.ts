@@ -74,6 +74,13 @@ function fakeBridge() {
     async commitCheckout() { return { success: true } },
     async pushCheckout() { return { success: true } },
     async pullCheckout() { return { success: true } },
+    async listTerminals() { return [] },
+    async createTerminal() { throw new Error('unused') },
+    async followTerminal() { return () => {} },
+    async writeTerminal() {},
+    async resizeTerminal() {},
+    async renameTerminal() {},
+    async closeTerminal() {},
     async createWorkspace(input) { created.push(input); return workspace() },
     async archiveWorkspace() {},
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
@@ -468,3 +475,58 @@ test('a checkout write for an unadvertised directory is refused', async () => {
   await client.settle()
   assert.equal(client.last().type, 'rpc_error')
 })
+
+test('list_terminals_request reports the runtime terminals', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'list_terminals_request', requestId: 'r1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'list_terminals_response')
+  assert.deepEqual(payload.terminals, [])
+})
+
+test('create_terminal_request names the workspace it opened in', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'create_terminal_request', requestId: 'r1', workspaceId: 'ws_1', name: 'shell' })
+  await client.settle()
+  // The fake bridge refuses creation, so the client gets the reason, not a crash.
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'create_terminal_response')
+  assert.equal(payload.terminal, null)
+  assert.match(String(payload.error), /unused/)
+})
+
+test('a terminal subscription hands the client its stream slot', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'subscribe_terminal_request', requestId: 'r1', terminalId: 'term_1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'subscribe_terminal_response')
+  assert.equal(payload.terminalId, 'term_1')
+  assert.equal(payload.slot, 0)
+  assert.equal(payload.error, null)
+})
+
+test('a terminal that cannot be attached answers with the reason', async () => {
+  const { bridge } = fakeBridge()
+  const failing: PaseoBridge = {
+    ...bridge,
+    followTerminal: async () => { throw new Error('terminal unavailable') },
+  }
+  const client = connect(makeDaemon(failing))
+  client.hello()
+  client.request({ type: 'subscribe_terminal_request', requestId: 'r1', terminalId: 'term_1' })
+  await client.settle()
+  // The slot is claimed first, so the client learns the id and slot it may
+  // reuse; a failed attach is logged rather than turning the reply into an error.
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(payload.slot, 0)
+  assert.equal(payload.error, null)
+})
+

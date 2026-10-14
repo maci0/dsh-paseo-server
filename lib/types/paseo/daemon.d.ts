@@ -56,11 +56,15 @@ export declare class PaseoDaemon {
      * @returns the connection handle for that socket.
      */
     attach(socket: WireSocket): PaseoConnection;
+    /** Route one inbound terminal stream frame. */
+    private onBinaryFrame;
     /** Route one inbound text frame. */
     private onFrame;
     /** Answer one request message. */
     private dispatch;
     private readonly workspaceCache;
+    /** Last known descriptor of every terminal, for change notifications. */
+    private readonly terminalCache;
     /** Pending `wait_for_finish_request` waiters, keyed by agent id. */
     private readonly waiters;
     /** Resolve when an agent settles, or after the client's timeout. */
@@ -91,6 +95,18 @@ export declare class PaseoDaemon {
      * commit message travels as its own argument, never through a shell.
      */
     private runCheckoutOperation;
+    /** Workspace identity for one directory this daemon advertised. */
+    private workspaceIdForDirectory;
+    /** Claim the lowest free stream slot for one terminal on this connection. */
+    private allocateSlot;
+    /** End one terminal's stream on this connection and release its slot. */
+    private stopTerminalStream;
+    /** Send one terminal frame, preferring the binary stream the client subscribed to. */
+    private sendTerminalEvent;
+    private sendTerminalBytes;
+    private publishTerminalState;
+    /** Apply one JSON terminal input, which is the client's non-stream input path. */
+    private applyTerminalInput;
     private knownDirectory;
     /** Push one bridge event to every admitted client. */
     private onBridgeEvent;
@@ -104,6 +120,8 @@ export declare function epochFor(agentId: string): string;
 export interface PaseoConnection {
     /** Feed one inbound text frame. */
     receive(text: string): void;
+    /** Feed one inbound binary frame, which carries terminal stream frames. */
+    receiveBinary(bytes: Uint8Array): void;
     /** Drop the connection without touching the socket. */
     dispose(): void;
 }

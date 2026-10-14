@@ -21,12 +21,18 @@ export function serveWebSocket(daemon: PaseoDaemon, socket: WebSocket): void {
     send: (text) => {
       if (socket.readyState === WsWebSocket.OPEN) socket.send(text)
     },
+    sendBinary: (bytes) => {
+      if (socket.readyState === WsWebSocket.OPEN) socket.send(bytes, { binary: true })
+    },
     close: (code, reason) => { socket.close(code, reason) },
     detach: () => { socket.removeAllListeners() },
   }
   const connection = daemon.attach(wire)
   socket.on('message', (data, isBinary) => {
-    if (isBinary) return
+    if (isBinary) {
+      connection.receiveBinary(toBytes(data))
+      return
+    }
     connection.receive(typeof data === 'string' ? data : data.toString('utf8'))
   })
   socket.on('close', () => {
@@ -54,4 +60,12 @@ export function upgradeWebSocket(
   head: Buffer,
 ): void {
   server.handleUpgrade(request, socket, head, (ws) => { serveWebSocket(daemon, ws) })
+}
+
+/** Narrow a `ws` message payload to bytes. */
+function toBytes(data: unknown): Uint8Array {
+  if (Array.isArray(data)) return Uint8Array.from(Buffer.concat(data as Buffer[]))
+  if (data instanceof ArrayBuffer) return new Uint8Array(data)
+  if (Buffer.isBuffer(data)) return Uint8Array.from(data)
+  return new Uint8Array(0)
 }

@@ -5,8 +5,15 @@
  * @module dsh-paseo-server/paseo/daemon
  */
 
-import type { AgentRecord, BridgeEvent, PaseoBridge, WorkspaceRecord } from '../bridge.ts'
+import type { AgentRecord, BridgeEvent, PaseoBridge, TerminalEvent, TerminalRecord, WorkspaceRecord } from '../bridge.ts'
 import type { DiffCompare, DiffFile, GitOperationResult } from '../dsh/git.ts'
+import {
+  TERMINAL_MAX_SLOT,
+  TERMINAL_OPCODE,
+  decodeResizePayload,
+  decodeTerminalFrame,
+  encodeOutputFrame,
+} from './terminal-frames.ts'
 import type { WireSocket } from './transport.ts'
 import {
   agentRemoved,
@@ -28,7 +35,13 @@ import {
   daemonStatus,
   eventsSubscriptionSet,
   envelope,
-  noTerminals,
+  terminalCreated,
+  terminalKilled,
+  terminalRenamed,
+  terminalSubscribeFailed,
+  terminalSubscribed,
+  terminalsChanged,
+  terminalsResponse,
   parseInbound,
   pong,
   providerModelsResponse,
@@ -91,6 +104,10 @@ interface Connection {
   closed: boolean
   /** Live checkout-diff subscriptions, keyed by subscription id. */
   readonly diffWatches: Map<string, ReturnType<typeof setInterval>>
+  /** Terminal subscriptions by slot, which is how a binary frame names its stream. */
+  readonly slots: Map<number, { readonly terminalId: string; readonly subscriptionId?: string }>
+  /** Active terminal streams by terminal id. */
+  readonly terminalStreams: Map<string, () => void>
 }
 
 /** Live event fan-out plus request dispatch for every connected client. */
@@ -133,15 +150,45 @@ export class PaseoDaemon {
    * @returns the connection handle for that socket.
    */
   attach(socket: WireSocket): PaseoConnection {
-    const connection: Connection = { socket, ready: false, closed: false, diffWatches: new Map() }
+    const connection: Connection = {
+      socket,
+      ready: false,
+      closed: false,
+      diffWatches: new Map(),
+      slots: new Map(),
+      terminalStreams: new Map(),
+    }
     this.connections.add(connection)
     return {
       receive: (text: string) => { this.onFrame(connection, text) },
+      receiveBinary: (bytes: Uint8Array) => { void this.onBinaryFrame(connection, bytes) },
       dispose: () => {
         connection.closed = true
         for (const subscriptionId of [...connection.diffWatches.keys()]) this.stopDiffWatch(connection, subscriptionId)
+        for (const terminalId of [...connection.terminalStreams.keys()]) this.stopTerminalStream(connection, terminalId)
         this.connections.delete(connection)
       },
+    }
+  }
+
+  /** Route one inbound terminal stream frame. */
+  private async onBinaryFrame(connection: Connection, bytes: Uint8Array): Promise<void> {
+    if (this.closed || connection.closed) return
+    const frame = decodeTerminalFrame(bytes)
+    if (frame === null) return
+    const terminalId = connection.slots.get(frame.slot)?.terminalId
+    if (terminalId === undefined) return
+    try {
+      if (frame.opcode === TERMINAL_OPCODE.INPUT) {
+        await this.options.bridge.writeTerminal(terminalId, new TextDecoder().decode(frame.payload))
+        return
+      }
+      if (frame.opcode === TERMINAL_OPCODE.RESIZE) {
+        const size = decodeResizePayload(frame.payload)
+        if (size !== null) await this.options.bridge.resizeTerminal(terminalId, size.cols, size.rows)
+      }
+    } catch (error) {
+      this.options.logger.warn(`paseo: terminal ${terminalId} input failed: ${String(error)}`)
     }
   }
 
@@ -467,7 +514,92 @@ export class PaseoDaemon {
           return
         }
         case 'list_terminals_request': {
-          reply(noTerminals(requestId))
+          reply(terminalsResponse(requestId, await this.options.bridge.listTerminals()))
+          return
+        }
+        case 'create_terminal_request': {
+          const workspaceId = stringField(message, 'workspaceId')
+            ?? await this.workspaceIdForDirectory(stringField(message, 'cwd'))
+          if (workspaceId === null) {
+            reply(terminalCreated(requestId, null, 'the request names no workspace this daemon knows'))
+            return
+          }
+          const size = recordValue(message.size)
+          try {
+            const terminal = await this.options.bridge.createTerminal({
+              workspaceId,
+              ...(stringField(message, 'name') === undefined ? {} : { name: stringField(message, 'name') }),
+              ...(size === undefined || typeof size.cols !== 'number' ? {} : { cols: size.cols }),
+              ...(size === undefined || typeof size.rows !== 'number' ? {} : { rows: size.rows }),
+            })
+            reply(terminalCreated(requestId, terminal, null))
+            this.broadcast(terminalsChanged(await this.options.bridge.listTerminals()))
+          } catch (error) {
+            reply(terminalCreated(requestId, null, error instanceof Error ? error.message : String(error)))
+          }
+          return
+        }
+        case 'subscribe_terminal_request': {
+          const terminalId = stringField(message, 'terminalId')
+          if (terminalId === undefined) {
+            reply(rpcError(requestId, type, 'terminalId is required', 'invalid_request'))
+            return
+          }
+          const slot = this.allocateSlot(connection, terminalId, stringField(message, 'subscriptionId'))
+          if (slot === null) {
+            reply(terminalSubscribeFailed(requestId, terminalId, 'no free terminal slot on this connection'))
+            return
+          }
+          reply(terminalSubscribed(requestId, terminalId, slot, stringField(message, 'subscriptionId')))
+          try {
+            const detach = await this.options.bridge.followTerminal(terminalId, (event) => {
+              this.sendTerminalEvent(connection, slot, event)
+            })
+            connection.terminalStreams.set(terminalId, detach)
+          } catch (error) {
+            this.options.logger.warn(`paseo: attaching to terminal ${terminalId} failed: ${String(error)}`)
+          }
+          return
+        }
+        case 'unsubscribe_terminal_request': {
+          const terminalId = stringField(message, 'terminalId')
+          if (terminalId !== undefined) this.stopTerminalStream(connection, terminalId)
+          return
+        }
+        case 'kill_terminal_request': {
+          const terminalId = stringField(message, 'terminalId')
+          if (terminalId === undefined) {
+            reply(rpcError(requestId, type, 'terminalId is required', 'invalid_request'))
+            return
+          }
+          let success = true
+          try {
+            this.stopTerminalStream(connection, terminalId)
+            await this.options.bridge.closeTerminal(terminalId)
+          } catch (error) {
+            success = false
+            this.options.logger.warn(`paseo: closing terminal ${terminalId} failed: ${String(error)}`)
+          }
+          reply(terminalKilled(requestId, terminalId, success))
+          this.broadcast(terminalsChanged(await this.options.bridge.listTerminals()))
+          return
+        }
+        case 'terminal.rename.request': {
+          const terminalId = stringField(message, 'terminalId')
+          const title = stringField(message, 'title')
+          if (terminalId === undefined || title === undefined) {
+            reply(rpcError(requestId, type, 'terminalId and title are required', 'invalid_request'))
+            return
+          }
+          await this.options.bridge.renameTerminal(terminalId, title)
+          reply(terminalRenamed(requestId, terminalId, title))
+          return
+        }
+        case 'terminal_input': {
+          const terminalId = stringField(message, 'terminalId')
+          const input = recordValue(message.message)
+          if (terminalId === undefined || input === undefined) return
+          await this.applyTerminalInput(terminalId, input)
           return
         }
         case 'subscription.release.request': {
@@ -497,6 +629,9 @@ export class PaseoDaemon {
   }
 
   private readonly workspaceCache = new Map<string, WorkspaceRecord>()
+
+  /** Last known descriptor of every terminal, for change notifications. */
+  private readonly terminalCache = new Map<string, TerminalRecord>()
 
   /** Pending `wait_for_finish_request` waiters, keyed by agent id. */
   private readonly waiters = new Map<string, Set<{ connection: Connection; requestId: string; timer: ReturnType<typeof setTimeout> }>>()
@@ -630,6 +765,92 @@ export class PaseoDaemon {
     }
   }
 
+  /** Workspace identity for one directory this daemon advertised. */
+  private async workspaceIdForDirectory(directory: string | undefined): Promise<string | null> {
+    if (directory === undefined) return null
+    const known = await this.knownDirectory(directory)
+    if (known === null) return null
+    const workspace = [...this.workspaceCache.values()].find((candidate) => candidate.directory === known)
+    return workspace?.id ?? null
+  }
+
+  /** Claim the lowest free stream slot for one terminal on this connection. */
+  private allocateSlot(connection: Connection, terminalId: string, subscriptionId: string | undefined): number | null {
+    for (const [slot, entry] of connection.slots) {
+      if (entry.terminalId === terminalId) return slot
+    }
+    for (let slot = 0; slot <= TERMINAL_MAX_SLOT; slot += 1) {
+      if (connection.slots.has(slot)) continue
+      connection.slots.set(slot, { terminalId, ...(subscriptionId === undefined ? {} : { subscriptionId }) })
+      return slot
+    }
+    return null
+  }
+
+  /** End one terminal's stream on this connection and release its slot. */
+  private stopTerminalStream(connection: Connection, terminalId: string): void {
+    const detach = connection.terminalStreams.get(terminalId)
+    if (detach !== undefined) {
+      detach()
+      connection.terminalStreams.delete(terminalId)
+    }
+    for (const [slot, entry] of [...connection.slots]) {
+      if (entry.terminalId === terminalId) connection.slots.delete(slot)
+    }
+  }
+
+  /** Send one terminal frame, preferring the binary stream the client subscribed to. */
+  private sendTerminalEvent(connection: Connection, slot: number, event: TerminalEvent): void {
+    if (connection.closed) return
+    // The client renders ANSI, so the attachment's recovery screen and later
+    // output travel the same way: as output bytes for that slot.
+    if (event.type === 'snapshot') {
+      if (event.screen.length > 0) this.sendTerminalBytes(connection, encodeOutputFrame(slot, event.screen))
+      return
+    }
+    if (event.type === 'output') {
+      if (event.data.length > 0) this.sendTerminalBytes(connection, encodeOutputFrame(slot, event.data))
+      return
+    }
+    void this.publishTerminalState(event.record)
+  }
+
+  private sendTerminalBytes(connection: Connection, frame: Uint8Array): void {
+    if (connection.socket.sendBinary !== undefined) {
+      connection.socket.sendBinary(frame)
+      return
+    }
+    // A transport without binary frames (a test double) still receives the
+    // frame, base64 encoded, rather than losing the terminal.
+    connection.socket.send(envelope({ type: 'terminal_frame', payload: Buffer.from(frame).toString('base64') }))
+  }
+
+  private async publishTerminalState(record: TerminalRecord): Promise<void> {
+    this.terminalCache.set(record.id, record)
+    this.broadcast(terminalsChanged(await this.options.bridge.listTerminals()))
+  }
+
+  /** Apply one JSON terminal input, which is the client's non-stream input path. */
+  private async applyTerminalInput(terminalId: string, input: Record<string, unknown>): Promise<void> {
+    const kind = stringField(input, 'type')
+    try {
+      if (kind === 'input') {
+        const data = stringField(input, 'data')
+        if (data !== undefined) await this.options.bridge.writeTerminal(terminalId, data)
+        return
+      }
+      if (kind === 'resize') {
+        const rows = input.rows
+        const cols = input.cols
+        if (typeof rows === 'number' && typeof cols === 'number' && rows > 0 && cols > 0) {
+          await this.options.bridge.resizeTerminal(terminalId, cols, rows)
+        }
+      }
+    } catch (error) {
+      this.options.logger.warn(`paseo: terminal ${terminalId} input failed: ${String(error)}`)
+    }
+  }
+
   private async knownDirectory(directory: string): Promise<string | null> {
     const cached = [...this.workspaceCache.values()].find((workspace) => workspace.directory === directory)
     if (cached !== undefined) return cached.directory
@@ -701,6 +922,8 @@ function stringField(message: Record<string, unknown>, key: string): string | un
 export interface PaseoConnection {
   /** Feed one inbound text frame. */
   receive(text: string): void
+  /** Feed one inbound binary frame, which carries terminal stream frames. */
+  receiveBinary(bytes: Uint8Array): void
   /** Drop the connection without touching the socket. */
   dispose(): void
 }

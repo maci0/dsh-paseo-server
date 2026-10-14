@@ -9,7 +9,7 @@
  */
 
 import type { DiffFile, GitStatus } from '../dsh/git.ts'
-import type { AgentRecord, AgentStatus, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts'
+import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts'
 
 /** Protocol version the 0.11.2 client sends and expects. */
 export const PASEO_PROTOCOL_VERSION = 1
@@ -53,6 +53,13 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'subscription.release.request',
   'session.events.set_subscription.request',
   'clear_agent_attention',
+  'list_terminals_request',
+  'create_terminal_request',
+  'subscribe_terminal_request',
+  'unsubscribe_terminal_request',
+  'kill_terminal_request',
+  'terminal.rename.request',
+  'terminal_input',
   'checkout_status_request',
   'checkout_commit_request',
   'checkout_push_request',
@@ -712,9 +719,63 @@ export function daemonStatus(input: {
   }
 }
 
-/** `list_terminals_response` with no terminals. */
-export function noTerminals(requestId: string): Record<string, unknown> {
-  return { type: 'list_terminals_response', payload: { requestId, terminals: [] } }
+/** One terminal in the client's shape. */
+export function terminalInfo(record: TerminalRecord): Record<string, unknown> {
+  return {
+    id: record.id,
+    name: record.title.length > 0 ? record.title : 'Terminal',
+    cwd: record.cwd,
+    workspaceId: record.workspaceId,
+    title: record.title,
+    activity: null,
+  }
+}
+
+/** `list_terminals_response`. */
+export function terminalsResponse(requestId: string, terminals: readonly TerminalRecord[]): Record<string, unknown> {
+  return { type: 'list_terminals_response', payload: { requestId, terminals: terminals.map(terminalInfo) } }
+}
+
+/** `create_terminal_response`. */
+export function terminalCreated(requestId: string, terminal: TerminalRecord | null, error: string | null): Record<string, unknown> {
+  return {
+    type: 'create_terminal_response',
+    payload: { requestId, terminal: terminal === null ? null : terminalInfo(terminal), error },
+  }
+}
+
+/** `subscribe_terminal_response`, which hands the client its stream slot. */
+export function terminalSubscribed(requestId: string, terminalId: string, slot: number, subscriptionId?: string): Record<string, unknown> {
+  return {
+    type: 'subscribe_terminal_response',
+    payload: {
+      requestId,
+      terminalId,
+      slot,
+      error: null,
+      ...(subscriptionId === undefined ? {} : { subscriptionId }),
+    },
+  }
+}
+
+/** `subscribe_terminal_response` for a terminal that cannot be attached. */
+export function terminalSubscribeFailed(requestId: string, terminalId: string, error: string): Record<string, unknown> {
+  return { type: 'subscribe_terminal_response', payload: { requestId, terminalId, error } }
+}
+
+/** `kill_terminal_response`. */
+export function terminalKilled(requestId: string, terminalId: string, success: boolean): Record<string, unknown> {
+  return { type: 'kill_terminal_response', payload: { requestId, terminalId, success } }
+}
+
+/** `terminal.rename.response`. */
+export function terminalRenamed(requestId: string, terminalId: string, title: string): Record<string, unknown> {
+  return { type: 'terminal.rename.response', payload: { requestId, terminalId, title, error: null } }
+}
+
+/** `terminals_changed`, which tells every client to re-list. */
+export function terminalsChanged(terminals: readonly TerminalRecord[]): Record<string, unknown> {
+  return { type: 'terminals_changed', payload: { terminals: terminals.map(terminalInfo) } }
 }
 
 /** `subscription.release.response`. */

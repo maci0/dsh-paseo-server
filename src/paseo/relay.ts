@@ -153,6 +153,7 @@ export function startRelayTransport(options: RelayOptions): RelayTransport {
       clearTimeout(handshakeTimer)
       const events = options.onConnection({
         send: (text) => { channel.send(text) },
+        sendBinary: (bytes) => { channel.sendBytes(bytes) },
         close: (code, reason) => { channel.close(code, reason) },
         detach: () => { deliver = undefined },
       })

@@ -8,7 +8,7 @@
  * @module dsh-paseo-server/paseo/wire
  */
 import type { DiffFile, GitStatus } from '../dsh/git.ts';
-import type { AgentRecord, AgentStatus, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts';
+import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
 export declare const PASEO_PROTOCOL_VERSION = 1;
 /** Paseo daemon version this server reports. */
@@ -155,8 +155,22 @@ export declare function daemonStatus(input: {
         readonly available: boolean;
     }[];
 }): Record<string, unknown>;
-/** `list_terminals_response` with no terminals. */
-export declare function noTerminals(requestId: string): Record<string, unknown>;
+/** One terminal in the client's shape. */
+export declare function terminalInfo(record: TerminalRecord): Record<string, unknown>;
+/** `list_terminals_response`. */
+export declare function terminalsResponse(requestId: string, terminals: readonly TerminalRecord[]): Record<string, unknown>;
+/** `create_terminal_response`. */
+export declare function terminalCreated(requestId: string, terminal: TerminalRecord | null, error: string | null): Record<string, unknown>;
+/** `subscribe_terminal_response`, which hands the client its stream slot. */
+export declare function terminalSubscribed(requestId: string, terminalId: string, slot: number, subscriptionId?: string): Record<string, unknown>;
+/** `subscribe_terminal_response` for a terminal that cannot be attached. */
+export declare function terminalSubscribeFailed(requestId: string, terminalId: string, error: string): Record<string, unknown>;
+/** `kill_terminal_response`. */
+export declare function terminalKilled(requestId: string, terminalId: string, success: boolean): Record<string, unknown>;
+/** `terminal.rename.response`. */
+export declare function terminalRenamed(requestId: string, terminalId: string, title: string): Record<string, unknown>;
+/** `terminals_changed`, which tells every client to re-list. */
+export declare function terminalsChanged(terminals: readonly TerminalRecord[]): Record<string, unknown>;
 /** `subscription.release.response`. */
 export declare function subscriptionReleased(requestId: string): Record<string, unknown>;
 /** `session.events.set_subscription.response`. */

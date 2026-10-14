@@ -21,6 +21,8 @@ import type {
   Disposable as BridgeDisposable,
   PaseoBridge,
   TimelineEntry,
+  TerminalEvent,
+  TerminalRecord,
   TimelineItem,
   WorkspaceRecord,
   WorkspaceStatus,
@@ -35,6 +37,9 @@ import type {
   ImageMediaType,
   SessionSummaryLike,
   SessionsLike,
+  TerminalControllerLike,
+  TerminalFrameLike,
+  TerminalInfoLike,
   WorkspaceLike,
   WorkspaceRegistryLike,
 } from '../host.ts'
@@ -53,6 +58,10 @@ const TITLE_MAX_CHARS = 80
 
 /** Messages one cold session's history page returns, matching the client's tail window. */
 const COLD_TIMELINE_PAGE_MESSAGES = 200
+
+/** PTY size a terminal starts with when the client names none. */
+const DEFAULT_TERMINAL_COLS = 80
+const DEFAULT_TERMINAL_ROWS = 24
 
 /** A bridge whose daemon identity can be installed after construction. */
 export interface DshBridgeHandle extends PaseoBridge {
@@ -74,6 +83,9 @@ class DshBridge implements PaseoBridge {
   private readonly titles = new Map<string, string | null>()
   private readonly failed = new Set<string>()
   /** Client-minted prompt identities awaiting their user/message event, oldest first. */
+  /** Owning session and writable attachment of every terminal this daemon saw. */
+  private readonly terminalOwners = new Map<string, { sessionId: string; attachmentId?: string }>()
+
   private readonly pendingClientMessageIds: Array<{ agentId: string; clientMessageId: string }> = []
   private started = false
 
@@ -303,6 +315,145 @@ class DshBridge implements PaseoBridge {
       if (this.session(agentId) !== undefined) throw error
       this.ctx.logger.debug(`paseo: cancel on cold session ${agentId} ignored: ${String(error)}`)
     }
+  }
+
+  /** Terminals retained by the sessions this daemon shows as agents. */
+  async listTerminals(): Promise<readonly TerminalRecord[]> {
+    const controller = this.ctx.get('terminalController') as TerminalControllerLike | undefined
+    if (controller === undefined) return []
+    const records: TerminalRecord[] = []
+    for (const summary of await this.summaries()) {
+      for (const info of controller.list(summary.sessionId)) {
+        const record = this.terminalRecord(summary.sessionId, summary.cwd, info)
+        this.terminalOwners.set(record.id, { sessionId: summary.sessionId, attachmentId: info.controllerId })
+        records.push(record)
+      }
+    }
+    return records
+  }
+
+  /** Allocate one terminal, owned by a live agent in the requested workspace. */
+  async createTerminal(input: {
+    readonly workspaceId: string
+    readonly name?: string
+    readonly cols?: number
+    readonly rows?: number
+  }): Promise<TerminalRecord> {
+    const controller = this.requireTerminalController()
+    const workspace = await this.workspaceFor(input.workspaceId)
+    if (workspace === undefined) throw new Error(`unknown workspace ${input.workspaceId}`)
+    const sessionId = await this.liveSessionIn(workspace.directory)
+    if (sessionId === null) throw new Error(`no live agent in ${workspace.directory} can own a terminal`)
+    const terminalId = `term_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    const info = await controller.create(this.requireAgent(sessionId), {
+      id: terminalId,
+      cols: input.cols ?? DEFAULT_TERMINAL_COLS,
+      rows: input.rows ?? DEFAULT_TERMINAL_ROWS,
+    }, new AbortController().signal)
+    const record = this.terminalRecord(sessionId, workspace.directory, info)
+    this.terminalOwners.set(record.id, { sessionId, attachmentId: info.controllerId })
+    if (input.name !== undefined && input.name.length > 0) {
+      try {
+        controller.rename(this.requireAgent(sessionId), record.id, input.name)
+      } catch (error) {
+        this.ctx.logger.warn(`paseo: naming terminal ${record.id} failed: ${String(error)}`)
+      }
+    }
+    return record
+  }
+
+  /** Attach to one terminal and pump its frames to the listener. */
+  async followTerminal(terminalId: string, listener: (event: TerminalEvent) => void): Promise<BridgeDisposable> {
+    const controller = this.requireTerminalController()
+    const owner = this.terminalOwners.get(terminalId)
+    if (owner === undefined) throw new Error(`unknown terminal ${terminalId}`)
+    const agent = this.requireAgent(owner.sessionId)
+    const attachmentId = `att_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+    const abort = new AbortController()
+    this.terminalOwners.set(terminalId, { sessionId: owner.sessionId, attachmentId })
+    const pump = async (): Promise<void> => {
+      try {
+        for await (const frame of controller.follow(agent, terminalId, attachmentId, abort.signal)) {
+          if (abort.signal.aborted) return
+          listener(this.terminalEvent(owner.sessionId, frame))
+        }
+      } catch (error) {
+        if (!abort.signal.aborted) this.ctx.logger.debug(`paseo: terminal ${terminalId} stream ended: ${String(error)}`)
+      }
+    }
+    void pump()
+    return () => { abort.abort() }
+  }
+
+  async writeTerminal(terminalId: string, data: string): Promise<void> {
+    const { agent, attachmentId } = this.requireTerminalOwner(terminalId)
+    await this.requireTerminalController().write(agent, terminalId, attachmentId, data)
+  }
+
+  async resizeTerminal(terminalId: string, cols: number, rows: number): Promise<void> {
+    const { agent, attachmentId } = this.requireTerminalOwner(terminalId)
+    await this.requireTerminalController().resize(agent, terminalId, attachmentId, cols, rows)
+  }
+
+  async renameTerminal(terminalId: string, title: string): Promise<void> {
+    const { agent } = this.requireTerminalOwner(terminalId)
+    this.requireTerminalController().rename(agent, terminalId, title)
+  }
+
+  async closeTerminal(terminalId: string): Promise<void> {
+    const { agent } = this.requireTerminalOwner(terminalId)
+    await this.requireTerminalController().close(agent, terminalId)
+    this.terminalOwners.delete(terminalId)
+  }
+
+  private requireTerminalController(): TerminalControllerLike {
+    const controller = this.ctx.get('terminalController') as TerminalControllerLike | undefined
+    if (controller === undefined) throw new Error('the terminalController service is not mounted')
+    return controller
+  }
+
+  /** The opaque Agent that owns a terminal, plus the attachment it is writable through. */
+  private requireTerminalOwner(terminalId: string): { agent: unknown; attachmentId: string } {
+    const owner = this.terminalOwners.get(terminalId)
+    if (owner === undefined) throw new Error(`unknown terminal ${terminalId}`)
+    return { agent: this.requireAgent(owner.sessionId), attachmentId: owner.attachmentId ?? '' }
+  }
+
+  /** The live Agent for one session, which every terminal call must name as owner. */
+  private requireAgent(sessionId: string): unknown {
+    const agents = this.ctx.get('agents') as AgentsLike | undefined
+    const agent = agents?.get(sessionId)
+    if (agent === undefined) throw new Error(`session ${sessionId} has no live agent`)
+    return agent
+  }
+
+  /** Most recently active live session whose working directory is this one. */
+  private async liveSessionIn(directory: string): Promise<string | null> {
+    const summaries = await this.summaries()
+    const live = summaries.filter((summary) => summary.agentAvailable && summary.cwd === directory)
+    if (live.length === 0) return null
+    return live.reduce((newest, candidate) => candidate.updatedAt > newest.updatedAt ? candidate : newest).sessionId
+  }
+
+  private terminalRecord(sessionId: string, cwd: string | undefined, info: TerminalInfoLike): TerminalRecord {
+    const directory = info.cwd.length > 0 ? info.cwd : cwd ?? ''
+    return {
+      id: info.id,
+      sessionId,
+      workspaceId: this.workspaceForCwd(directory).id,
+      title: info.title,
+      cwd: directory,
+      cols: info.cols,
+      rows: info.rows,
+      state: info.state,
+      exitCode: info.exitCode,
+    }
+  }
+
+  private terminalEvent(sessionId: string, frame: TerminalFrameLike): TerminalEvent {
+    if (frame.type === 'snapshot') return { type: 'snapshot', screen: frame.screen }
+    if (frame.type === 'output') return { type: 'output', data: frame.data }
+    return { type: 'state', record: this.terminalRecord(sessionId, frame.info.cwd, frame.info) }
   }
 
   async createWorkspace(input: { readonly directory: string; readonly name?: string }): Promise<WorkspaceRecord> {

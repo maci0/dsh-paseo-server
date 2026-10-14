@@ -78,18 +78,32 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 
 ## Still to build
 
-Terminals, workspace scripts, schedules and heartbeats, agent deletion, and the
-forge half of the git surface (diffs, commit, push, pull requests) are not
+Workspace scripts, schedules and heartbeats, agent deletion, and the
+forge half of the git surface (pull requests, checks, forge search) is not
 bridged yet. Each has a DSH counterpart to map onto, so none is deferred on
 principle; this table tracks what is left.
 
 | Paseo feature | Target |
 | --- | --- |
-| Terminals | The terminal controller's agent-scoped PTY sessions. |
 | Workspace scripts | The DSH job registry. |
 | Schedules and heartbeats | The DSH schedule plugin's own store. |
 | Agent delete | Session removal, once the persistence service exposes it. |
 | Forge panels and pull requests | A forge client, which the harness does not ship. |
+
+## Terminals
+
+Paseo terminals are workspace-scoped; DSH terminals are owner-scoped, one PTY
+per Session. The bridge closes that gap by owning each terminal with the most
+recently active live agent whose working directory is the requested workspace,
+so a shell opened from the phone runs where the workspace runs.
+
+Listing, creation, input, resize, rename, and close map straight onto the
+terminal controller. Output does not ride the JSON envelope: Paseo carries it as
+`[opcode][slot][payload]` binary frames, so a subscription is given a slot, the
+attachment's recovery screen arrives as an output frame carrying its ANSI, and
+later output follows on the same slot. Input and resize travel the same way in
+the other direction, and the JSON `terminal_input` message is accepted for
+clients that send it instead.
 
 ## Git surface
 
