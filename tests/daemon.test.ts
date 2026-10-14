@@ -69,6 +69,7 @@ function fakeBridge() {
     async createAgent(input) { created.push(input); return agent({ id: 'ses_new', workspaceId: 'ws_1' }) },
     async cancelAgent() {},
     async archiveAgent() { return new Date().toISOString() },
+    async checkoutStatus() { return { isGit: false, repoRoot: null, currentBranch: null, isDirty: false, hasRemote: false, remoteUrl: null, upstreamRef: null, aheadOfOrigin: null, behindOfOrigin: null } },
     async createWorkspace(input) { created.push(input); return workspace() },
     async archiveWorkspace() {},
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
@@ -117,7 +118,7 @@ function makeDaemon(bridge: PaseoBridge, options: Partial<ConstructorParameters<
     bridge,
     logger: { debug: () => {}, info: () => {}, warn: () => {} },
     hostname: 'test',
-    pairingOffer: () => ({ url: 'https://app.paseo.sh/#offer=x', relayEnabled: false }),
+    pairingOffer: () => ({ url: 'https://app.paseo.sh/#offer=x', qr: 'QR', relayEnabled: false }),
     ...options,
   })
   daemon.start()
@@ -344,4 +345,41 @@ test('close_items_request is acknowledged without inventing archived rows', asyn
   assert.equal(client.last().type, 'close_items_response')
   assert.deepEqual(payload.agents, [])
   assert.deepEqual(payload.terminals, [])
+})
+
+test('checkout_status_request reports a known workspace checkout', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'workspace.create.request', requestId: 'r0', source: { kind: 'directory', path: '/repo' } })
+  await client.settle()
+  client.request({ type: 'checkout_status_request', requestId: 'r1', cwd: '/repo' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'checkout_status_response')
+  assert.equal(payload.cwd, '/repo')
+  assert.equal(payload.isGit, false)
+  assert.equal(payload.requestId, 'r1')
+})
+
+test('checkout_status_request refuses a directory this daemon never advertised', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'checkout_status_request', requestId: 'r1', cwd: '/etc' })
+  await client.settle()
+  assert.equal(client.last().type, 'rpc_error')
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(payload.code, 'workspace_not_found')
+})
+
+test('the pairing offer carries the generated terminal QR', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'daemon.get_pairing_offer.request', requestId: 'r1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(payload.qr, 'QR')
+  assert.match(String(payload.url), /#offer=/)
 })

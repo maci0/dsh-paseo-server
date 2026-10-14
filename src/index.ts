@@ -18,7 +18,7 @@ import { PaseoDaemon } from './paseo/daemon.ts'
 import type { Logger } from './paseo/daemon.ts'
 import { createDshBridge } from './dsh/bridge.ts'
 import { loadOrCreateIdentity } from './paseo/identity.ts'
-import { buildPairingInfo } from './paseo/pairing.ts'
+import { buildPairingInfo, renderPairingQr } from './paseo/pairing.ts'
 import type { PairingInfo } from './paseo/pairing.ts'
 import { DEFAULT_RELAY_ENDPOINT, startRelayTransport } from './paseo/relay.ts'
 import type { RelayTransport } from './paseo/relay.ts'
@@ -181,6 +181,13 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
   }
 
   let pairing: PairingInfo = pairingInfo(live(), identity)
+  // The offer callback is synchronous, so the terminal QR is rendered once and
+  // reused; it only changes when the row or the relay endpoint does.
+  let pairingQr: string | null = null
+  const refreshPairingQr = (): void => {
+    void renderPairingQr(pairing.url).then((qr) => { pairingQr = qr })
+  }
+  refreshPairingQr()
   const daemonLogger: Logger = {
     debug: () => {},
     info: (message) => { logger.info(message) },
@@ -200,7 +207,7 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
     hostname: process.env.HOSTNAME ?? 'dsh',
     password: password(),
     ...(webServer?.host === undefined || webServer.port === undefined ? {} : { listen: `${webServer.host}:${webServer.port}` }),
-    pairingOffer: () => ({ url: pairing.url, relayEnabled: live().relayEnabled }),
+    pairingOffer: () => ({ url: pairing.url, qr: pairingQr, relayEnabled: live().relayEnabled }),
   })
   daemon.start()
 

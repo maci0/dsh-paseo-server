@@ -15,6 +15,8 @@ export interface Logger {
 /** What the daemon needs to publish a pairing offer. */
 export interface PairingOffer {
     readonly url: string;
+    /** Terminal-renderable QR of that URL, or null when rendering failed. */
+    readonly qr: string | null;
     readonly relayEnabled: boolean;
 }
 /** Daemon construction options. */
@@ -68,6 +70,12 @@ export declare class PaseoDaemon {
     private settleWaiters;
     private cacheWorkspaces;
     private workspaceFor;
+    /**
+     * Resolve a requested directory to one this daemon advertised.
+     * @param directory - directory the client asked about.
+     * @returns the canonical known directory, or null when nothing matches.
+     */
+    private knownDirectory;
     /** Push one bridge event to every admitted client. */
     private onBridgeEvent;
     private publishAgentEvent;

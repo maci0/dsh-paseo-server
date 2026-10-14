@@ -7,6 +7,7 @@
  *
  * @module dsh-paseo-server/bridge
  */
+import type { GitStatus } from './dsh/git.ts';
 /** Disposer returned by every subscription. */
 export type Disposable = () => void;
 /** Paseo agent lifecycle statuses, as the protocol defines them. */
@@ -170,6 +171,8 @@ export interface PaseoBridge {
             readonly mimeType: string;
         }[];
     }): Promise<AgentRecord>;
+    /** Checkout state of one workspace directory, for the client's git surface. */
+    checkoutStatus(directory: string): Promise<GitStatus>;
     /** Archive an agent, removing it from the active list. Resolves the archive instant. */
     archiveAgent(agentId: string): Promise<string>;
     /** Interrupt one agent's active turn, if any. */

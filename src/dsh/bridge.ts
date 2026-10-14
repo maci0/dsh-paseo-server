@@ -11,6 +11,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
+import { readGitStatus } from './git.ts'
+import type { GitStatus } from './git.ts'
 import type {
   AgentRecord,
   AgentStatus,
@@ -147,6 +149,11 @@ class DshBridge implements PaseoBridge {
       agents.push(this.agentRecord(summary, byCwd.get(summary.cwd ?? '')))
     }
     return agents
+  }
+
+  /** Read one directory's checkout state. */
+  async checkoutStatus(directory: string): Promise<GitStatus> {
+    return readGitStatus(directory)
   }
 
   /** Archive one session, which removes it from the active agent list. */

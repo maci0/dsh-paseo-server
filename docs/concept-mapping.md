@@ -73,17 +73,31 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 | `archive_agent_request` | `workspaceRegistry.archiveSession(sessionId)`, which also hides the session from the active list. |
 | `wait_for_finish_request` | Resolve when the Agent leaves `running`, or at the client's deadline. |
 | agent creation | `ctx.agents.create(...)` with the requested workspace directory as `meta.cwd`. |
-| terminal requests | Answered with an empty terminal list. See Not mapped. |
+| terminal requests | Answered with an empty terminal list until the terminal bridge lands; see Still to build. |
 | provider and model catalogs | Served from `ctx.llm`, so the client composer has a model to select. |
 
-## Not mapped
+## Still to build
 
-| Paseo feature | Why |
+Terminals, workspace scripts, schedules and heartbeats, agent deletion, and the
+forge half of the git surface (diffs, commit, push, pull requests) are not
+bridged yet. Each has a DSH counterpart to map onto, so none is deferred on
+principle; this table tracks what is left.
+
+| Paseo feature | Target |
 | --- | --- |
-| Terminals | DSH exposes shell execution as a tool, not as a persistent PTY a plugin can attach a client to. Paseo's UI is usable without terminals, so terminal requests return an empty list. |
-| Workspace scripts | DSH has no per-workspace script registry. |
-| Git and forge panels | DSH keeps no forge session state of its own. Workspaces report `isGit`, a branch, and a remote, and the pull-request panel stays empty. |
-| Schedules and heartbeats | DSH schedules belong to the DSH schedule plugin, which owns its own store and triggers. Mirroring them would give two sources of truth for one cadence. |
+| Terminals | The terminal controller's agent-scoped PTY sessions. |
+| Workspace scripts | The DSH job registry. |
+| Schedules and heartbeats | The DSH schedule plugin's own store. |
+| Agent delete | Session removal, once the persistence service exposes it. |
+| Git diff, commit, push, pull | The `git` binary, as checkout status already reads it. |
+| Forge panels and pull requests | A forge client, which the harness does not ship. |
+
+## Git surface
+
+`checkout_status_request` reads the repository directly: root, current branch,
+dirty state, origin URL, upstream ref, and the ahead/behind counts against that
+upstream. Only directories this daemon advertised are read, so the request
+cannot be used as a path probe.
 
 ## Deferred
 

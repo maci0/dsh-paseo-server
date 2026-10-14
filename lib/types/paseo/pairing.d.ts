@@ -45,3 +45,13 @@ export declare function buildPairingInfo(input: {
 export declare function serializeRelayUri(offer: ConnectionOffer, password?: string): string;
 /** Decode an offer fragment, for the pairing surface's own verification. */
 export declare function parseOfferFragment(fragment: string): ConnectionOffer | null;
+/**
+ * Render a pairing URL as terminal-block QR text.
+ *
+ * This is what `daemon.get_pairing_offer.response.qr` carries and what the
+ * `paseo pair` command prints, so a terminal can show the code without an
+ * image surface.
+ * @param url - pairing URL to encode.
+ * @returns one line per QR row, or null when rendering failed.
+ */
+export declare function renderPairingQr(url: string): Promise<string | null>;

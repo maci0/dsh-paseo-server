@@ -20,6 +20,7 @@ import {
   agentsResponse,
   attentionCleared,
   cancelResponse,
+  checkoutStatusResponse,
   daemonStatus,
   eventsSubscriptionSet,
   envelope,
@@ -56,6 +57,8 @@ export interface Logger {
 /** What the daemon needs to publish a pairing offer. */
 export interface PairingOffer {
   readonly url: string
+  /** Terminal-renderable QR of that URL, or null when rendering failed. */
+  readonly qr: string | null
   readonly relayEnabled: boolean
 }
 
@@ -374,6 +377,22 @@ export class PaseoDaemon {
           this.waitForSettle(connection, requestId, agent, timeoutMs)
           return
         }
+        case 'checkout_status_request': {
+          const directory = stringField(message, 'cwd') ?? stringField(message, 'workspaceDirectory')
+          if (directory === undefined) {
+            reply(rpcError(requestId, type, 'cwd is required', 'invalid_request'))
+            return
+          }
+          // Only directories this daemon advertised are read: the request would
+          // otherwise be an arbitrary path probe into the operator's machine.
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          reply(checkoutStatusResponse(requestId, known, await this.options.bridge.checkoutStatus(known)))
+          return
+        }
         case 'daemon.get_status.request': {
           reply(daemonStatus({
             requestId,
@@ -388,7 +407,7 @@ export class PaseoDaemon {
           const offer = this.options.pairingOffer()
           reply({
             type: 'daemon.get_pairing_offer.response',
-            payload: { requestId, url: offer.url, qr: null, relayEnabled: offer.relayEnabled },
+            payload: { requestId, url: offer.url, qr: offer.qr, relayEnabled: offer.relayEnabled },
           })
           return
         }
@@ -476,6 +495,19 @@ export class PaseoDaemon {
     if (cached !== undefined) return cached
     this.cacheWorkspaces(await this.options.bridge.listWorkspaces())
     return this.workspaceCache.get(workspaceId)
+  }
+
+  /**
+   * Resolve a requested directory to one this daemon advertised.
+   * @param directory - directory the client asked about.
+   * @returns the canonical known directory, or null when nothing matches.
+   */
+  private async knownDirectory(directory: string): Promise<string | null> {
+    const cached = [...this.workspaceCache.values()].find((workspace) => workspace.directory === directory)
+    if (cached !== undefined) return cached.directory
+    this.cacheWorkspaces(await this.options.bridge.listWorkspaces())
+    const found = [...this.workspaceCache.values()].find((workspace) => workspace.directory === directory)
+    return found?.directory ?? null
   }
 
   /** Push one bridge event to every admitted client. */

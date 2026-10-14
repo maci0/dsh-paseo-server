@@ -78,3 +78,33 @@ export function parseOfferFragment(fragment: string): ConnectionOffer | null {
     return null
   }
 }
+
+/** Quiet zone around the QR, in modules, as the Paseo daemon renders it. */
+const QR_MARGIN_MODULES = 4
+
+/** Wrap one QR row in a white background and black foreground, as Paseo does for a terminal. */
+const QR_LINE_PREFIX = '\u001b[47m \u001b[30m'
+const QR_LINE_SUFFIX = '\u001b[0m'
+
+/**
+ * Render a pairing URL as terminal-block QR text.
+ *
+ * This is what `daemon.get_pairing_offer.response.qr` carries and what the
+ * `paseo pair` command prints, so a terminal can show the code without an
+ * image surface.
+ * @param url - pairing URL to encode.
+ * @returns one line per QR row, or null when rendering failed.
+ */
+export async function renderPairingQr(url: string): Promise<string | null> {
+  try {
+    const qrcode = await import('qrcode')
+    const rendered = await qrcode.toString(url, { type: 'utf8', margin: QR_MARGIN_MODULES })
+    return rendered
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => `${QR_LINE_PREFIX}${line}${QR_LINE_SUFFIX}`)
+      .join('\n')
+  } catch {
+    return null
+  }
+}

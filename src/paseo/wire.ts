@@ -8,6 +8,7 @@
  * @module dsh-paseo-server/paseo/wire
  */
 
+import type { GitStatus } from '../dsh/git.ts'
 import type { AgentRecord, AgentStatus, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts'
 
 /** Protocol version the 0.11.2 client sends and expects. */
@@ -52,6 +53,7 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'subscription.release.request',
   'session.events.set_subscription.request',
   'clear_agent_attention',
+  'checkout_status_request',
   'archive_agent_request',
   'close_items_request',
   'workspace.mark_unread.request',
@@ -545,6 +547,49 @@ export function providerModesResponse(requestId: string, provider: string): Reco
   return {
     type: 'list_provider_modes_response',
     payload: { provider, modes: [{ id: 'default', label: 'Default' }], error: null, fetchedAt: new Date().toISOString(), requestId },
+  }
+}
+
+/** `checkout_status_response` for one directory. */
+export function checkoutStatusResponse(requestId: string, directory: string, status: GitStatus): Record<string, unknown> {
+  const common = { cwd: directory, error: null, requestId, isPaseoOwnedWorktree: false as const }
+  if (!status.isGit) {
+    return {
+      type: 'checkout_status_response',
+      payload: {
+        ...common,
+        isGit: false,
+        repoRoot: null,
+        currentBranch: null,
+        isDirty: null,
+        baseRef: null,
+        aheadBehind: null,
+        aheadOfOrigin: null,
+        behindOfOrigin: null,
+        hasRemote: false,
+        remoteUrl: null,
+      },
+    }
+  }
+  const ahead = status.aheadOfOrigin
+  const behind = status.behindOfOrigin
+  return {
+    type: 'checkout_status_response',
+    payload: {
+      ...common,
+      isGit: true,
+      repoRoot: status.repoRoot ?? directory,
+      mainRepoRoot: null,
+      currentBranch: status.currentBranch,
+      isDirty: status.isDirty,
+      baseRef: null,
+      aheadBehind: ahead === null || behind === null ? null : { ahead, behind },
+      aheadOfOrigin: ahead,
+      behindOfOrigin: behind,
+      hasRemote: status.hasRemote,
+      remoteUrl: status.remoteUrl,
+      upstreamRef: status.upstreamRef,
+    },
   }
 }
 

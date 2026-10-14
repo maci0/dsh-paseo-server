@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DEFAULT_ALLOWED_ORIGINS, originAllowed, rejectUpgrade } from '../src/paseo/origin.ts'
+import { renderPairingQr } from '../src/paseo/pairing.ts'
 
 test('a native client sends no origin and is admitted', () => {
   assert.equal(originAllowed(undefined, DEFAULT_ALLOWED_ORIGINS), true)
@@ -41,4 +42,14 @@ test('a rejection answers with 403 and destroys the socket', () => {
   rejectUpgrade({ write: (data) => { calls.push(data) }, destroy: () => { calls.push('destroy') } })
   assert.match(calls[0] ?? '', /^HTTP\/1\.1 403 Forbidden/)
   assert.equal(calls[1], 'destroy')
+})
+
+test('the pairing QR is terminal text wrapped for a dark background', async () => {
+  const qr = await renderPairingQr('https://app.paseo.sh/#offer=abc')
+  assert.ok(qr !== null)
+  const lines = qr.split('\n')
+  assert.ok(lines.length > 10)
+  for (const line of lines) {
+    assert.match(line, /^\u001b\[47m \u001b\[30m.*\u001b\[0m$/)
+  }
 })

@@ -7,6 +7,7 @@
  *
  * @module dsh-paseo-server/paseo/wire
  */
+import type { GitStatus } from '../dsh/git.ts';
 import type { AgentRecord, AgentStatus, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
 export declare const PASEO_PROTOCOL_VERSION = 1;
@@ -125,6 +126,8 @@ export declare function availableProvidersResponse(requestId: string, providers:
 }[]): Record<string, unknown>;
 /** `list_provider_modes_response`; DSH has no provider-owned modes. */
 export declare function providerModesResponse(requestId: string, provider: string): Record<string, unknown>;
+/** `checkout_status_response` for one directory. */
+export declare function checkoutStatusResponse(requestId: string, directory: string, status: GitStatus): Record<string, unknown>;
 /** `agent_update` upsert. */
 export declare function agentUpdate(agent: AgentRecord, workspace: WorkspaceRecord | null): Record<string, unknown>;
 /** `agent_update` remove. */
