@@ -240,6 +240,27 @@ export class PaseoDaemon {
           reply(cancelResponse(requestId, agentId, await this.options.bridge.getAgent(agentId)))
           return
         }
+        case 'archive_agent_request': {
+          const agentId = stringField(message, 'agentId')
+          if (agentId === undefined) {
+            reply(rpcError(requestId, type, 'agentId is required', 'invalid_request'))
+            return
+          }
+          try {
+            const archivedAt = await this.options.bridge.archiveAgent(agentId)
+            reply({ type: 'agent_archived', payload: { agentId, archivedAt, requestId } })
+          } catch (error) {
+            reply(rpcError(requestId, type, error instanceof Error ? error.message : String(error), 'archive_failed'))
+          }
+          return
+        }
+        case 'close_items_request': {
+          // Closing a tab synchronizes client state. There is no daemon-side
+          // item to close, so every requested agent is already gone from this
+          // client's view and nothing is reported as archived.
+          reply({ type: 'close_items_response', payload: { requestId, agents: [], terminals: [] } })
+          return
+        }
         case 'workspace.create.request': {
           const source = recordValue(message.source)
           if (source === undefined || source.kind !== 'directory' || typeof source.path !== 'string') {

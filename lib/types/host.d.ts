@@ -93,6 +93,10 @@ export interface WorkspaceLike {
 export interface WorkspaceRegistryLike {
     list(): readonly WorkspaceLike[];
     create(path: string, title?: string): Promise<WorkspaceLike>;
+    /** Sessions the operator archived; an archived session is hidden from the active list. */
+    readonly archivedSessionIds?: readonly string[];
+    /** Archive one session, which bars it from running a model step until restored. */
+    archiveSession?(sessionId: string, options?: Record<string, unknown>): Promise<void>;
 }
 /** High-level session API the client protocol is built on. */
 export interface SessionControllerLike {

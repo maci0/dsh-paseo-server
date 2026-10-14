@@ -68,6 +68,7 @@ function fakeBridge() {
     async sendPrompt(agentId, text) { prompts.push({ agentId, text }) },
     async createAgent(input) { created.push(input); return agent({ id: 'ses_new', workspaceId: 'ws_1' }) },
     async cancelAgent() {},
+    async archiveAgent() { return new Date().toISOString() },
     async createWorkspace(input) { created.push(input); return workspace() },
     async archiveWorkspace() {},
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
@@ -317,4 +318,30 @@ test('daemon.get_status reports the runtime providers', async () => {
   assert.equal(payload.serverId, 'srv_test')
   assert.equal(payload.listen, '127.0.0.1:1234')
   assert.deepEqual(payload.providers, [{ provider: 'stub', available: true, error: null }])
+})
+
+test('archive_agent_request answers with agent_archived', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'archive_agent_request', requestId: 'r1', agentId: 'ses_1' })
+  await client.settle()
+  const message = client.last()
+  assert.equal(message.type, 'agent_archived')
+  const payload = message.payload as Record<string, unknown>
+  assert.equal(payload.agentId, 'ses_1')
+  assert.equal(payload.requestId, 'r1')
+  assert.match(String(payload.archivedAt), /^\d{4}-/)
+})
+
+test('close_items_request is acknowledged without inventing archived rows', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'close_items_request', requestId: 'r1', agentIds: ['ses_1'], terminalIds: [] })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'close_items_response')
+  assert.deepEqual(payload.agents, [])
+  assert.deepEqual(payload.terminals, [])
 })

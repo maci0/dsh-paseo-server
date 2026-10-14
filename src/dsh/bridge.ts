@@ -136,12 +136,28 @@ class DshBridge implements PaseoBridge {
   async listAgents(): Promise<readonly AgentRecord[]> {
     const workspaces = await this.listWorkspaces()
     const byCwd = new Map(workspaces.map((workspace) => [workspace.directory, workspace]))
+    const archived = this.archivedSessionIds()
     const agents: AgentRecord[] = []
     for (const summary of await this.summaries()) {
       if (summary.parentSessionId !== undefined || summary.origin === 'subagent') continue
+      if (archived.has(summary.sessionId)) continue
       agents.push(this.agentRecord(summary, byCwd.get(summary.cwd ?? '')))
     }
     return agents
+  }
+
+  /** Archive one session, which removes it from the active agent list. */
+  async archiveAgent(agentId: string): Promise<string> {
+    const registry = this.ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
+    if (registry?.archiveSession === undefined) throw new Error('the workspace registry cannot archive sessions')
+    await registry.archiveSession(agentId)
+    return new Date().toISOString()
+  }
+
+  /** Session ids the operator archived. */
+  private archivedSessionIds(): ReadonlySet<string> {
+    const registry = this.ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
+    return new Set(registry?.archivedSessionIds ?? [])
   }
 
   async getAgent(id: string): Promise<AgentRecord | null> {

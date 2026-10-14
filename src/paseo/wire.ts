@@ -52,6 +52,8 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'subscription.release.request',
   'session.events.set_subscription.request',
   'clear_agent_attention',
+  'archive_agent_request',
+  'close_items_request',
   'workspace.mark_unread.request',
   'list_terminals_request',
   'subscribe_terminals_request',

@@ -110,3 +110,13 @@ test('a cold session joins the workspace its directory names', async () => {
   assert.ok(workspaces.some((workspace) => workspace.id === agent?.workspaceId))
   assert.equal(workspaces.find((workspace) => workspace.id === agent?.workspaceId)?.directory, '/repo')
 })
+
+test('an archived session is not listed as an active agent', async () => {
+  const { services } = coldHost()
+  ;(services.workspaceRegistry as { archivedSessionIds?: readonly string[] }).archivedSessionIds = ['session-cold']
+  const bridge = createDshBridge({ ctx: fakeContext(services).ctx, defaultProvider: 'deepseek', defaultModel: 'deepseek-flash' })
+  assert.deepEqual(await bridge.listAgents(), [])
+  // The agent itself still resolves, because a client that already holds its
+  // tab may ask for it by id.
+  assert.equal((await bridge.getAgent('session-cold'))?.id, 'session-cold')
+})

@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.3.0
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.4.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -80,8 +80,8 @@ is a timeline row.
 Works, verified against the shipped Paseo CLI and the Paseo client: pairing, the
 relay transport with end-to-end encryption, workspace and agent listing, agent
 creation (both `agent.create.request` and the legacy `create_agent_request`),
-timeline reads, prompt send, interrupt, wait-for-finish, provider and model
-catalogs, and the pairing card with its QR.
+timeline reads, prompt send, interrupt, archive, wait-for-finish, provider and
+model catalogs, and the pairing card with its QR.
 
 A full turn was driven end to end: `paseo run --provider <p>/<m>` created a DSH
 session, the harness ran the model call, and the client read the reply back from

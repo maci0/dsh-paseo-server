@@ -69,7 +69,8 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 | `fetch_agent_request` | One Agent plus its placement. |
 | `fetch_agent_timeline_request` | Fold the session log into timeline rows; for a persisted session, fold the durable history page. |
 | `send_agent_message_request` | `Agent.followup(createUserMessage(...))`, resuming a persisted session first. |
-| `cancel_agent_request` | `Agent.cancel({ kind: 'user' })`. |
+| `cancel_agent_request` | `Agent.cancel({ kind: 'user' })`; a session with no turn is a no-op. |
+| `archive_agent_request` | `workspaceRegistry.archiveSession(sessionId)`, which also hides the session from the active list. |
 | `wait_for_finish_request` | Resolve when the Agent leaves `running`, or at the client's deadline. |
 | agent creation | `ctx.agents.create(...)` with the requested workspace directory as `meta.cwd`. |
 | terminal requests | Answered with an empty terminal list. See Not mapped. |
@@ -89,7 +90,7 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 | Item | Note |
 | --- | --- |
 | Subagent projection | DSH child sessions carry `origin: 'subagent'`. Paseo has a provider-subagent surface, which is the natural target. |
-| Archive and delete | Paseo archives an agent and deletes a workspace. DSH workspace deletion exists; agent archive does not. |
+| Delete | Paseo hard-deletes an agent. DSH archives a session instead, which is the same visible outcome and stays reversible. |
 | Attachments and images | Paseo sends attachments with a prompt. The first release accepts text only and rejects a prompt that carries attachments. |
 | Cold-session provider | A persisted session reports the configured default provider and model until it is resumed, because nothing has read the persisted request header. |
 

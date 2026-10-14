@@ -127,6 +127,8 @@ export interface PaseoBridge {
     /** Initial prompt, delivered as the agent's first turn. */
     readonly prompt?: string
   }): Promise<AgentRecord>
+  /** Archive an agent, removing it from the active list. Resolves the archive instant. */
+  archiveAgent(agentId: string): Promise<string>
   /** Interrupt one agent's active turn, if any. */
   cancelAgent(agentId: string): Promise<void>
   /** Create a workspace over a directory. */
