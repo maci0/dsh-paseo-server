@@ -104,11 +104,13 @@ export interface SessionControllerLike {
   /** One message-aligned page of a Session log, readable while the Session is cold. */
   page?(request: {
     readonly address: { readonly kind: 'session'; readonly sessionId: string }
-    /** `-1` reads the newest page. */
+    /** Inclusive log cut; read one from {@link SessionControllerLike.projections} first. */
     readonly throughSeq: number
     readonly beforeSeq?: number
     readonly maxMessages?: number
   }, signal: AbortSignal): Promise<{ readonly records: readonly { readonly event: SessionEventLike }[]; readonly hasMore: boolean }>
+  /** The projection watermark a cold Session's log reaches, which a page needs as its cut. */
+  projections?(request: { readonly sessionId: string }, signal: AbortSignal): Promise<{ readonly kind?: string; readonly asOfSeq?: number } | null>
   /** Install a model selection on a session, when the composition supports it. */
   selectModel?(request: {
     readonly sessionId: string

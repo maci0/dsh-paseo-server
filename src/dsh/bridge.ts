@@ -46,6 +46,9 @@ export interface DshBridgeOptions {
 /** Longest agent title derived from a first prompt. */
 const TITLE_MAX_CHARS = 80
 
+/** Messages one cold session's history page returns, matching the client's tail window. */
+const COLD_TIMELINE_PAGE_MESSAGES = 200
+
 /** A bridge whose daemon identity can be installed after construction. */
 export interface DshBridgeHandle extends PaseoBridge {
   bindIdentity(serverId: string, version: string): void
@@ -136,7 +139,6 @@ class DshBridge implements PaseoBridge {
     const agents: AgentRecord[] = []
     for (const summary of await this.summaries()) {
       if (summary.parentSessionId !== undefined || summary.origin === 'subagent') continue
-      if (!summary.agentAvailable) continue
       agents.push(this.agentRecord(summary, byCwd.get(summary.cwd ?? '')))
     }
     return agents
@@ -144,17 +146,42 @@ class DshBridge implements PaseoBridge {
 
   async getAgent(id: string): Promise<AgentRecord | null> {
     const summary = (await this.summaries()).find((item) => item.sessionId === id)
-    if (summary === undefined || !summary.agentAvailable) return null
+    if (summary === undefined) return null
     const workspace = summary.cwd === undefined ? undefined : this.workspaceForCwd(summary.cwd)
     return this.agentRecord(summary, workspace)
   }
 
   async getTimeline(agentId: string, options?: { readonly limit?: number }): Promise<readonly TimelineEntry[]> {
-    const session = this.session(agentId)
-    if (session === undefined) return []
-    const entries = foldEvents(session.snapshotEvents(0, session.seq))
     const limit = options?.limit
+    const session = this.session(agentId)
+    // A cold Session has no attached log, so its transcript comes from the
+    // durable history page instead. Sending it a prompt resumes it.
+    const entries = session === undefined
+      ? await this.coldTimeline(agentId)
+      : foldEvents(session.snapshotEvents(0, session.seq))
     return limit === undefined || entries.length <= limit ? entries : entries.slice(entries.length - limit)
+  }
+
+  /** Read one page of a cold Session's log and fold it into timeline rows. */
+  private async coldTimeline(agentId: string): Promise<TimelineEntry[]> {
+    const controller = this.ctx.get('sessionController') as SessionControllerLike | undefined
+    if (controller?.page === undefined || controller.projections === undefined) return []
+    const signal = new AbortController().signal
+    try {
+      // A page needs an inclusive log cut, and only the projection watermark
+      // carries one for a Session nothing is attached to.
+      const projections = await controller.projections({ sessionId: agentId }, signal)
+      if (projections?.kind !== 'sequenced' || typeof projections.asOfSeq !== 'number') return []
+      const page = await controller.page({
+        address: { kind: 'session', sessionId: agentId },
+        throughSeq: projections.asOfSeq,
+        maxMessages: COLD_TIMELINE_PAGE_MESSAGES,
+      }, signal)
+      return foldEvents(page.records.map((record) => record.event))
+    } catch (error) {
+      this.ctx.logger.warn(`paseo: cold timeline for ${agentId} failed: ${String(error)}`)
+      return []
+    }
   }
 
   async sendPrompt(agentId: string, text: string, clientMessageId?: string): Promise<void> {
@@ -219,7 +246,14 @@ class DshBridge implements PaseoBridge {
   }
 
   async cancelAgent(agentId: string): Promise<void> {
-    await this.requireController().cancel({ sessionId: agentId })
+    // Stopping a cold session is a no-op, not a failure: it has no turn to
+    // interrupt, and the client shows the same stopped state either way.
+    try {
+      await this.requireController().cancel({ sessionId: agentId })
+    } catch (error) {
+      if (this.session(agentId) !== undefined) throw error
+      this.ctx.logger.debug(`paseo: cancel on cold session ${agentId} ignored: ${String(error)}`)
+    }
   }
 
   async createWorkspace(input: { readonly directory: string; readonly name?: string }): Promise<WorkspaceRecord> {
@@ -345,13 +379,13 @@ class DshBridge implements PaseoBridge {
     return {
       id: summary.sessionId,
       shortId: summary.sessionId.slice(-8),
-      title: this.titles.get(summary.sessionId) ?? this.titleOf(session),
+      title: this.titles.get(summary.sessionId) ?? this.titleOf(session) ?? projectedTitle(summary),
       provider: header?.config?.provider ?? this.defaultProvider,
       model: header?.config?.model ?? this.defaultModel,
       status,
       cwd: directory,
       workspaceId: workspace?.id ?? this.workspaceForCwd(directory).id,
-      createdAt: new Date(summary.updatedAt).toISOString(),
+      createdAt: updatedAt,
       updatedAt,
       lastUserMessageAt: updatedAt,
       archivedAt: null,
@@ -558,6 +592,18 @@ export function workspaceStatus(statuses: readonly AgentStatus[]): WorkspaceStat
   if (statuses.includes('initializing') || statuses.includes('running')) return 'running'
   if (statuses.includes('error')) return 'failed'
   return 'done'
+}
+
+/**
+ * Title a cold listing already carries.
+ *
+ * The session-title plugin projects the current title, and the list service
+ * ships that projection as a hint for exactly this case: a Session with no
+ * attached log still has a name.
+ */
+function projectedTitle(summary: SessionSummaryLike): string | null {
+  const title = summary.projections?.values?.['title']
+  return typeof title === 'string' && title.length > 0 ? title : null
 }
 
 function titleFrom(text: string | undefined): string | undefined {

@@ -20,8 +20,8 @@ not mapped and is reported as an empty collection rather than invented.
 | --- | --- | --- |
 | Project | git repository root of a workspace directory | `projectId` is a stable digest of the canonical repository root. Two workspaces in one repository share one project, which is what Paseo expects for a checkout and its worktrees. A directory that is not in a git work tree becomes its own project. |
 | Workspace | one `ctx.workspaceRegistry` record | `workspaceDirectory` is the canonical directory path. `name` and `title` are the DSH workspace title. `workspaceKind` is `directory`, and `isPaseoOwnedWorktree` is false because DSH does not hand out worktrees. |
-| Agent | one root DSH Agent, which is one Session | `id` is the DSH session id, so a Paseo client controls exactly the conversation DSH owns. Subagent sessions (a `parentSession` header) are not listed in the first release; see Deferred. |
-| Provider | DSH LLM provider id | Paseo treats a provider as a free-form string. The plugin reports the provider the agent's request header names, falling back to the configured default provider. |
+| Agent | one root DSH Session, live or persisted | `id` is the DSH session id, so a Paseo client controls exactly the conversation DSH owns. A Session nothing is attached to is still an agent: prompting it resumes it, and its transcript comes from the durable history page. Subagent sessions (a `parentSession` header) are not listed; see Deferred. |
+| Provider | DSH LLM provider id | For a live Session, the provider its request header names. For a persisted one, the configured default, because nothing has been read that would name another. |
 | Model | DSH model id | Same source as the provider. |
 | Agent status | Agent runtime state, folded with turn activity | See the status table below. |
 | Timeline entry | one DSH session event | See the timeline table below. |
@@ -33,9 +33,12 @@ not mapped and is reported as an empty collection rather than invented.
 | --- | --- |
 | `initializing` | The Agent exists but its first turn has not started. |
 | `running` | A turn is open on the session. |
-| `idle` | The Agent is live and no turn is open. |
+| `idle` | No turn is open, whether the session is live or persisted. |
 | `error` | The last turn ended with an error. |
 | `closed` | The Agent was disposed outside the plugin. |
+
+A persisted session reports `idle` rather than `closed`, because a prompt
+resumes it. `closed` would tell a client the agent is gone.
 
 Paseo workspace status is derived from the statuses of the agents in that
 workspace, most severe first: `needs_input`, `failed`, `running`, `attention`,
@@ -64,8 +67,8 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 | `project.list.request` | Distinct project roots of those workspaces. |
 | `fetch_agents_request` | List root Agents from `ctx.agents`, joined to their workspace. |
 | `fetch_agent_request` | One Agent plus its placement. |
-| `fetch_agent_timeline_request` | Fold the session log into timeline rows. |
-| `send_agent_message_request` | `Agent.followup(createUserMessage(...))`. |
+| `fetch_agent_timeline_request` | Fold the session log into timeline rows; for a persisted session, fold the durable history page. |
+| `send_agent_message_request` | `Agent.followup(createUserMessage(...))`, resuming a persisted session first. |
 | `cancel_agent_request` | `Agent.cancel({ kind: 'user' })`. |
 | `wait_for_finish_request` | Resolve when the Agent leaves `running`, or at the client's deadline. |
 | agent creation | `ctx.agents.create(...)` with the requested workspace directory as `meta.cwd`. |
@@ -88,6 +91,7 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 | Subagent projection | DSH child sessions carry `origin: 'subagent'`. Paseo has a provider-subagent surface, which is the natural target. |
 | Archive and delete | Paseo archives an agent and deletes a workspace. DSH workspace deletion exists; agent archive does not. |
 | Attachments and images | Paseo sends attachments with a prompt. The first release accepts text only and rejects a prompt that carries attachments. |
+| Cold-session provider | A persisted session reports the configured default provider and model until it is resumed, because nothing has read the persisted request header. |
 
 ## Protocol provenance
 
