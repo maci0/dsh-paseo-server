@@ -24,7 +24,11 @@ import { DEFAULT_RELAY_ENDPOINT, startRelayTransport } from './paseo/relay.ts'
 import type { RelayTransport } from './paseo/relay.ts'
 import { upgradeWebSocket } from './paseo/websocket.ts'
 import { DEFAULT_ALLOWED_ORIGINS, originAllowed, rejectUpgrade } from './paseo/origin.ts'
+import { createReadStream } from 'node:fs'
+import type { ServerResponse } from 'node:http'
+import { stat } from 'node:fs/promises'
 import { PROXY_PREFIX, forwardScriptRequest, parseProxyPath } from './paseo/script-proxy.ts'
+import type { DownloadGrant } from './dsh/files.ts'
 import type { HostContext, JobsLike, WebServerLike } from './host.ts'
 import type { Volatile } from '@deepseek-ai/cordis'
 
@@ -45,6 +49,9 @@ export const ROUTE_STATUS = '/api/status'
 
 /** Route the Paseo CLI probes for liveness. */
 export const ROUTE_HEALTH = '/api/health'
+
+/** Download endpoint the Paseo client builds from a token. */
+export const ROUTE_DOWNLOAD = '/api/files/download'
 
 /** WebSocket path the Paseo client connects to. */
 export const DEFAULT_WS_PATH = '/ws'
@@ -291,6 +298,27 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
       },
     }), 'paseo-server: pairing QR route')
 
+    // The client downloads a file through a single-use token, which is the
+    // Paseo download contract: /api/files/download?token=...
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: ROUTE_DOWNLOAD,
+      handler: (req, res) => {
+        const url = new URL(req.url ?? ROUTE_DOWNLOAD, 'http://localhost')
+        const token = url.searchParams.get('token')
+        if (token === null || token.length === 0) {
+          sendJson(res, 400, { error: 'Missing download token' })
+          return
+        }
+        const grant = daemon.takeDownload(token)
+        if (grant === null) {
+          sendJson(res, 403, { error: 'Invalid or expired token' })
+          return
+        }
+        void streamDownload(res, grant)
+      },
+    }), 'paseo-server: file download route')
+
     // A workspace script's proxy URL points here: the daemon forwards to the
     // script's own loopback port, because it publishes no tunnel of its own.
     ctx.effect(() => webServer.register({
@@ -369,4 +397,22 @@ function sendJson(res: { statusCode: number; setHeader(name: string, value: stri
   res.setHeader('content-type', 'application/json; charset=utf-8')
   res.setHeader('cache-control', 'no-store')
   res.end(JSON.stringify(payload))
+}
+
+/** Stream one granted file, or the reason it cannot be streamed. */
+async function streamDownload(res: ServerResponse, grant: DownloadGrant): Promise<void> {
+  try {
+    const info = await stat(grant.path)
+    if (!info.isFile()) {
+      sendJson(res, 404, { error: 'File not found' })
+      return
+    }
+    res.statusCode = 200
+    res.setHeader('content-type', grant.mimeType)
+    res.setHeader('content-length', String(info.size))
+    res.setHeader('content-disposition', `attachment; filename="${grant.fileName.replace(/"/g, '')}"`)
+    createReadStream(grant.path).pipe(res)
+  } catch {
+    sendJson(res, 404, { error: 'File not found' })
+  }
 }

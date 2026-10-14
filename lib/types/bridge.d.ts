@@ -7,9 +7,10 @@
  *
  * @module dsh-paseo-server/bridge
  */
-import type { DirectoryEntry, FileContent, PathSuggestion, ProjectConfigFile } from './dsh/files.ts';
+import type { DirectoryEntry, FileContent, PathSuggestion, ProjectConfigFile, UploadTarget, WriteOutcome } from './dsh/files.ts';
+import type { WorktreeEntry } from './dsh/git.ts';
 import type { BranchEntry, CommitEntry, DiffCompare, DiffFile, GitOperationResult, GitStatus, StashEntry } from './dsh/git.ts';
-import type { CheckDetails, ForgeWriteResult, PullRequestLookup, PullRequestTimelineItem } from './dsh/forge.ts';
+import type { CheckDetails, ForgeHit, RepositoryHit, ForgeWriteResult, PullRequestLookup, PullRequestTimelineItem } from './dsh/forge.ts';
 import type { PaseoCadence } from './dsh/schedules.ts';
 /** Disposer returned by every subscription. */
 export type Disposable = () => void;
@@ -271,8 +272,63 @@ export interface PaseoBridge {
     listDirectory(directory: string, path?: string): Promise<readonly DirectoryEntry[] | null>;
     /** Read one file inside a workspace directory. */
     readWorkspaceFile(directory: string, path: string): Promise<FileContent | null>;
+    /** Write one file inside a workspace directory, refusing a stale revision. */
+    writeWorkspaceFile(directory: string, path: string, content: string, expectedModifiedAt: string): Promise<WriteOutcome>;
+    /** Create one file or directory inside a workspace. */
+    createEntry(directory: string, parentPath: string, name: string, kind: 'file' | 'directory'): Promise<{
+        readonly path: string;
+    } | {
+        readonly error: string;
+    }>;
+    /** Rename one entry inside a workspace. */
+    renameEntry(directory: string, path: string, name: string): Promise<{
+        readonly path: string;
+    } | {
+        readonly error: string;
+    }>;
+    /** Duplicate one entry inside a workspace. */
+    duplicateEntry(directory: string, path: string): Promise<{
+        readonly path: string;
+    } | {
+        readonly error: string;
+    }>;
+    /** Delete one entry inside a workspace. */
+    deleteEntry(directory: string, path: string): Promise<{
+        readonly ok: true;
+    } | {
+        readonly error: string;
+    }>;
+    /** One path's size and modification time inside a workspace. */
+    statEntry(directory: string, path: string): Promise<{
+        readonly size: number;
+        readonly modifiedAt: string;
+    } | null>;
+    /** Begin an upload and name the file it will land in. */
+    beginUpload(input: {
+        readonly fileName: string;
+        readonly mimeType: string;
+        readonly size: number;
+    }): Promise<UploadTarget>;
     /** Remove one workspace record; its Sessions and their logs stay. */
     deleteWorkspace(workspaceId: string): Promise<boolean>;
+    /** Worktrees of one repository. */
+    listWorktrees(directory: string): Promise<readonly WorktreeEntry[]>;
+    /**
+     * Create a worktree beside its repository and register it as a workspace.
+     * @param directory - repository directory.
+     * @param input - branch to create or check out, and the ref to branch from.
+     * @returns the new workspace, or why it was refused.
+     */
+    createWorktree(directory: string, input: {
+        readonly branch: string;
+        readonly from?: string;
+    }): Promise<{
+        readonly workspace: WorkspaceRecord;
+    } | {
+        readonly error: string;
+    }>;
+    /** Remove one worktree and the workspace that points at it. */
+    removeWorktree(directory: string, path: string): Promise<GitOperationResult>;
     /**
      * Pin or unpin one workspace.
      *
@@ -339,6 +395,44 @@ export interface PaseoBridge {
     checkDetails(directory: string, checkRunId: number): Promise<{
         readonly details: CheckDetails | null;
         readonly error: string | null;
+    }>;
+    /** Rename one agent. */
+    renameAgent(agentId: string, title: string): Promise<void>;
+    /** Install a reasoning effort on one agent's current model. */
+    selectAgentThinking(agentId: string, thinkingOptionId: string | null): Promise<void>;
+    /** Run a workspace's declared setup command as a background job. */
+    runWorkspaceSetup(workspaceId: string): Promise<boolean>;
+    /** Current setup state of one workspace, or null when none ran. */
+    workspaceSetupStatus(workspaceId: string): Promise<Record<string, unknown> | null>;
+    /** Slash commands one agent can run. */
+    listCommands(agentId: string): Promise<readonly {
+        readonly name: string;
+        readonly description: string;
+        readonly argumentHint: string;
+    }[]>;
+    /** Create one directory for the project picker. */
+    createDirectory(parentPath: string, name: string): Promise<{
+        readonly path: string;
+    } | {
+        readonly error: string;
+    }>;
+    /** Clone one GitHub repository and register it as a workspace. */
+    cloneRepository(repo: string, target: string): Promise<{
+        readonly workspace: WorkspaceRecord;
+    } | {
+        readonly error: string;
+    }>;
+    /** Search repositories the forge token can see. */
+    searchRepositories(query: string, limit: number): Promise<{
+        readonly repositories: readonly RepositoryHit[];
+        readonly error: string | null;
+        readonly authenticated: boolean;
+    }>;
+    /** Search issues and pull requests the forge token can see. */
+    searchForge(query: string, limit: number): Promise<{
+        readonly items: readonly ForgeHit[];
+        readonly error: string | null;
+        readonly authenticated: boolean;
     }>;
     /** Archive an agent, removing it from the active list. Resolves the archive instant. */
     archiveAgent(agentId: string): Promise<string>;

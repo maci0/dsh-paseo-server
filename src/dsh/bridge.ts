@@ -20,11 +20,18 @@ import {
   parseGithubRemote,
   readCheckDetails,
   readPullRequestTimeline,
+  searchIssuesAndPulls,
+  searchRepositories,
   setAutoMerge as forgeSetAutoMerge,
 } from './forge.ts'
+import { basename, dirname, join } from 'node:path'
 import {
+  addWorktree,
+  cloneRepository,
   commitCheckout,
   commitFileDiff,
+  listWorktrees,
+  removeWorktree,
   discardChanges,
   listBranches,
   listCommits,
@@ -42,10 +49,12 @@ import {
 } from './git.ts'
 import type {
   CheckDetails,
+  ForgeHit,
   ForgeWriteResult,
   GithubRemote,
   PullRequestLookup,
   PullRequestTimelineItem,
+  RepositoryHit,
 } from './forge.ts'
 import type {
   BranchEntry,
@@ -55,19 +64,36 @@ import type {
   GitOperationResult,
   GitStatus,
   StashEntry,
+  WorktreeEntry,
 } from './git.ts'
 import {
+  createDirectory,
+  createEntry,
+  deleteEntry,
+  duplicateEntry,
   listDirectory,
   readProjectConfig,
   readWorkspaceFile,
+  renameEntry,
+  sanitizeFileName,
+  statEntry,
   suggestPaths,
+  uploadPath,
   writeProjectConfig,
+  writeWorkspaceFile,
 } from './files.ts'
-import type { DirectoryEntry, FileContent, PathSuggestion, ProjectConfigFile } from './files.ts'
+import type {
+  DirectoryEntry,
+  FileContent,
+  PathSuggestion,
+  ProjectConfigFile,
+  UploadTarget,
+  WriteOutcome,
+} from './files.ts'
 import { loadPausedReminders, savePausedReminders } from './paused-reminders.ts'
 import type { PausedReminder } from './paused-reminders.ts'
 import { fromPaseoCadence, toPaseoCadence } from './schedules.ts'
-import { readWorkspaceScripts } from './scripts.ts'
+import { readWorkspaceScripts, readWorktreeSetup } from './scripts.ts'
 import type { PaseoCadence } from './schedules.ts'
 import type { WorkspaceScriptDefinition } from './scripts.ts'
 import type {
@@ -88,6 +114,7 @@ import type {
 } from '../bridge.ts'
 import type {
   AgentsLike,
+  CommandsLike,
   HostContext,
   SessionControllerLike,
   SessionEventLike,
@@ -148,6 +175,9 @@ class DshBridge implements PaseoBridge {
   /** Client-minted prompt identities awaiting their user/message event, oldest first. */
   /** Owning session and writable attachment of every terminal this daemon saw. */
   /** Running script jobs, keyed by workspace and script name. */
+  /** Workspaces whose declared setup command this daemon started. */
+  private readonly setupJobs = new Set<string>()
+
   /** Session that owns each reminder this daemon has seen. */
   private readonly scheduleOwners = new Map<string, string>()
 
@@ -324,6 +354,87 @@ class DshBridge implements PaseoBridge {
   /** Read one file inside a workspace directory. */
   async readWorkspaceFile(directory: string, path: string): Promise<FileContent | null> {
     return readWorkspaceFile(directory, path)
+  }
+
+  /** Write one file inside a workspace. */
+  async writeWorkspaceFile(directory: string, path: string, content: string, expectedModifiedAt: string): Promise<WriteOutcome> {
+    return writeWorkspaceFile(directory, path, content, expectedModifiedAt)
+  }
+
+  async createEntry(directory: string, parentPath: string, name: string, kind: 'file' | 'directory'): Promise<{ readonly path: string } | { readonly error: string }> {
+    return createEntry(directory, parentPath, name, kind)
+  }
+
+  async renameEntry(directory: string, path: string, name: string): Promise<{ readonly path: string } | { readonly error: string }> {
+    return renameEntry(directory, path, name)
+  }
+
+  async duplicateEntry(directory: string, path: string): Promise<{ readonly path: string } | { readonly error: string }> {
+    return duplicateEntry(directory, path)
+  }
+
+  async deleteEntry(directory: string, path: string): Promise<{ readonly ok: true } | { readonly error: string }> {
+    return deleteEntry(directory, path)
+  }
+
+  async statEntry(directory: string, path: string): Promise<{ readonly size: number; readonly modifiedAt: string } | null> {
+    return statEntry(directory, path)
+  }
+
+  /** Begin an upload under the harness home, or the OS temp root without one. */
+  async beginUpload(input: { readonly fileName: string; readonly mimeType: string; readonly size: number }): Promise<UploadTarget> {
+    const id = `upload_${randomUUID()}`
+    const home = this.homePath()?.('paseo') ?? process.env.DSH_HOME ?? process.cwd()
+    const fileName = sanitizeFileName(input.fileName)
+    return {
+      id,
+      fileName,
+      mimeType: input.mimeType,
+      path: uploadPath(home, id, fileName),
+      expectedSize: input.size,
+      received: 0,
+      started: false,
+    }
+  }
+
+  /** Worktrees of one repository. */
+  async listWorktrees(directory: string): Promise<readonly WorktreeEntry[]> {
+    return listWorktrees(directory)
+  }
+
+  /**
+   * Create a worktree beside its repository and register it as a workspace.
+   *
+   * The path follows the repository's own name so two repositories do not
+   * collide in one parent directory.
+   */
+  async createWorktree(directory: string, input: {
+    readonly branch: string
+    readonly from?: string
+  }): Promise<{ readonly workspace: WorkspaceRecord } | { readonly error: string }> {
+    const status = await readGitStatus(directory)
+    const root = status.repoRoot ?? directory
+    const path = join(dirname(root), `${basename(root)}-${input.branch.replace(/[^A-Za-z0-9._-]/g, '-')}`)
+    const created = await addWorktree(root, {
+      path,
+      branch: input.branch,
+      ...(input.from === undefined ? {} : { from: input.from }),
+    })
+    if ('error' in created) return created
+    const workspace = await this.createWorkspace({ directory: path, name: `${basename(root)} (${input.branch})` })
+    return { workspace }
+  }
+
+  /** Remove one worktree and its workspace record. */
+  async removeWorktree(directory: string, path: string): Promise<GitOperationResult> {
+    const status = await readGitStatus(directory)
+    const root = status.repoRoot ?? directory
+    const removed = await removeWorktree(root, path, false)
+    if (removed.success) {
+      const workspace = (await this.listWorkspaces()).find((candidate) => candidate.directory === path)
+      if (workspace !== undefined) await this.deleteWorkspace(workspace.id)
+    }
+    return removed
   }
 
   /** Remove one workspace record. */
@@ -523,6 +634,127 @@ class DshBridge implements PaseoBridge {
     const lookup = await this.checkoutPrStatus(directory)
     if (lookup.status !== null) return lookup.status.number
     return lookup.error ?? 'no pull request is open for this branch'
+  }
+
+  /** Search repositories the token can see. */
+  async searchRepositories(query: string, limit: number): Promise<{
+    readonly repositories: readonly RepositoryHit[]
+    readonly error: string | null
+    readonly authenticated: boolean
+  }> {
+    return searchRepositories(query, limit, forgeToken())
+  }
+
+  /** Search issues and pull requests the token can see. */
+  async searchForge(query: string, limit: number): Promise<{
+    readonly items: readonly ForgeHit[]
+    readonly error: string | null
+    readonly authenticated: boolean
+  }> {
+    return searchIssuesAndPulls(query, limit, forgeToken())
+  }
+
+  /** Create one directory for the project picker. */
+  async createDirectory(parentPath: string, name: string): Promise<{ readonly path: string } | { readonly error: string }> {
+    return createDirectory(parentPath, name)
+  }
+
+  /** Clone one repository and register the checkout as a workspace. */
+  async cloneRepository(repo: string, target: string): Promise<{ readonly workspace: WorkspaceRecord } | { readonly error: string }> {
+    const cloned = await cloneRepository(repo, target)
+    if (!cloned.success) return { error: cloned.error?.message ?? 'cloning failed' }
+    return { workspace: await this.createWorkspace({ directory: target, name: repo.split('/').pop() ?? target }) }
+  }
+
+  /** Install a reasoning effort on the agent's current model. */
+  async selectAgentThinking(agentId: string, thinkingOptionId: string | null): Promise<void> {
+    const controller = this.requireController()
+    if (controller.selectModel === undefined) throw new Error('this harness cannot select a model')
+    const agent = await this.getAgent(agentId)
+    if (agent === null) throw new Error(`unknown agent ${agentId}`)
+    if (agent.model === null) throw new Error('the agent has no model to set a reasoning effort on')
+    await controller.selectModel({
+      sessionId: agentId,
+      provider: agent.provider,
+      model: agent.model,
+      ...(thinkingOptionId === null || thinkingOptionId.length === 0 ? {} : { reasoningEffort: thinkingOptionId }),
+    })
+  }
+
+  /** Run the workspace's declared setup command as a background job. */
+  async runWorkspaceSetup(workspaceId: string): Promise<boolean> {
+    const workspace = await this.workspaceFor(workspaceId)
+    if (workspace === undefined) throw new Error(`unknown workspace ${workspaceId}`)
+    const command = await readWorktreeSetup(workspace.directory)
+    if (command === null) return false
+    const jobs = this.requireJobs()
+    jobs.start({
+      kind: 'paseo-setup',
+      label: `setup: ${command}`,
+      run: (job) => {
+        const child = spawn(command, { cwd: workspace.directory, shell: true, env: process.env })
+        return {
+          cancel: () => { child.kill('SIGTERM') },
+          done: new Promise((resolve) => {
+            const forward = (chunk: Buffer): void => { job.append(chunk.toString('utf8')) }
+            child.stdout?.on('data', forward)
+            child.stderr?.on('data', forward)
+            child.on('error', (error: Error) => { resolve({ ok: false, detail: error.message }) })
+            child.on('close', (code: number | null, signal: string | null) => {
+              resolve({ ok: code === 0, detail: signal === null ? `exit code: ${String(code)}` : `signal: ${signal}` })
+            })
+          }),
+        }
+      },
+    })
+    this.setupJobs.add(workspaceId)
+    return true
+  }
+
+  /** Whether a setup command is running or finished for one workspace. */
+  async workspaceSetupStatus(workspaceId: string): Promise<Record<string, unknown> | null> {
+    if (!this.setupJobs.has(workspaceId)) return null
+    const workspace = await this.workspaceFor(workspaceId)
+    if (workspace === undefined) return null
+    return {
+      status: 'completed',
+      detail: {
+        type: 'worktree_setup',
+        worktreePath: workspace.directory,
+        branchName: workspace.checkout.isGit ? '' : '',
+        log: '',
+        commands: [],
+      },
+      error: null,
+    }
+  }
+
+  /** Slash commands the live agent sees, which is what a client offers. */
+  async listCommands(agentId: string): Promise<readonly { readonly name: string; readonly description: string; readonly argumentHint: string }[]> {
+    const commands = this.ctx.get('commands') as CommandsLike | undefined
+    if (commands === undefined) return []
+    const agents = this.ctx.get('agents') as AgentsLike | undefined
+    const agent = agents?.get(agentId)
+    if (agent === undefined) return []
+    try {
+      return commands.list(agent).map((command) => ({
+        name: command.name,
+        description: command.description,
+        argumentHint: command.input?.hint ?? '',
+      }))
+    } catch {
+      // A command view that cannot resolve for this agent offers nothing,
+      // which is the same answer as no commands at all.
+      return []
+    }
+  }
+
+  /** Rename one session, which is the agent's title. */
+  async renameAgent(agentId: string, title: string): Promise<void> {
+    const controller = this.requireController()
+    if (controller.rename === undefined) throw new Error('this harness cannot rename a session')
+    await controller.rename({ sessionId: agentId, title })
+    this.titles.set(agentId, title)
   }
 
   /** Archive one session, which removes it from the active agent list. */

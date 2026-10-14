@@ -403,3 +403,97 @@ async function forgeSend(
     return null
   }
 }
+
+/** One repository a search returned. */
+export interface RepositoryHit {
+  readonly id: string
+  readonly name: string
+  readonly nameWithOwner: string
+  readonly description: string | null
+  readonly visibility: 'public' | 'private' | 'internal'
+  readonly updatedAt: string
+  readonly cloneUrl: string
+}
+
+/** One issue or pull request a search returned. */
+export interface ForgeHit {
+  readonly kind: 'issue' | 'pr'
+  readonly number: number
+  readonly title: string
+  readonly url: string
+  readonly state: string
+}
+
+/**
+ * Search repositories the token can see.
+ * @param query - search text.
+ * @param limit - most results to return.
+ * @param token - forge token.
+ * @returns the repositories, and why the search could not run.
+ */
+export async function searchRepositories(
+  query: string,
+  limit: number,
+  token: string | undefined,
+): Promise<{ readonly repositories: readonly RepositoryHit[]; readonly error: string | null; readonly authenticated: boolean }> {
+  if (token === undefined) return { repositories: [], error: null, authenticated: false }
+  const params = new URLSearchParams({ q: query, per_page: String(Math.min(limit, 50)) })
+  const response = await forgeFetch(`${GITHUB_API}/search/repositories?${params.toString()}`, token)
+  if (response === null) return { repositories: [], error: 'the forge did not answer', authenticated: true }
+  if (!response.ok) return { repositories: [], error: `the forge answered ${String(response.status)}`, authenticated: true }
+  const body = await response.json() as { items?: unknown }
+  if (!Array.isArray(body.items)) return { repositories: [], error: null, authenticated: true }
+  const repositories: RepositoryHit[] = []
+  for (const entry of body.items) {
+    if (entry === null || typeof entry !== 'object') continue
+    const repo = entry as Record<string, unknown>
+    const owner = repo.owner === null || typeof repo.owner !== 'object' ? '' : String((repo.owner as Record<string, unknown>).login ?? '')
+    const name = typeof repo.name === 'string' ? repo.name : ''
+    if (name.length === 0) continue
+    repositories.push({
+      id: String(repo.id ?? `${owner}/${name}`),
+      name,
+      nameWithOwner: typeof repo.full_name === 'string' ? repo.full_name : `${owner}/${name}`,
+      description: typeof repo.description === 'string' ? repo.description : null,
+      visibility: repo.private === true ? 'private' : 'public',
+      updatedAt: typeof repo.updated_at === 'string' ? repo.updated_at : new Date(0).toISOString(),
+      cloneUrl: typeof repo.clone_url === 'string' ? repo.clone_url : `https://github.com/${owner}/${name}.git`,
+    })
+  }
+  return { repositories, error: null, authenticated: true }
+}
+
+/**
+ * Search issues and pull requests across the repositories the token can see.
+ * @param query - search text.
+ * @param limit - most results to return.
+ * @param token - forge token.
+ * @returns the hits, and why the search could not run.
+ */
+export async function searchIssuesAndPulls(
+  query: string,
+  limit: number,
+  token: string | undefined,
+): Promise<{ readonly items: readonly ForgeHit[]; readonly error: string | null; readonly authenticated: boolean }> {
+  if (token === undefined) return { items: [], error: null, authenticated: false }
+  const params = new URLSearchParams({ q: query, per_page: String(Math.min(limit, 50)) })
+  const response = await forgeFetch(`${GITHUB_API}/search/issues?${params.toString()}`, token)
+  if (response === null) return { items: [], error: 'the forge did not answer', authenticated: true }
+  if (!response.ok) return { items: [], error: `the forge answered ${String(response.status)}`, authenticated: true }
+  const body = await response.json() as { items?: unknown }
+  if (!Array.isArray(body.items)) return { items: [], error: null, authenticated: true }
+  const items: ForgeHit[] = []
+  for (const entry of body.items) {
+    if (entry === null || typeof entry !== 'object') continue
+    const hit = entry as Record<string, unknown>
+    if (typeof hit.number !== 'number' || typeof hit.html_url !== 'string') continue
+    items.push({
+      kind: hit.pull_request === undefined ? 'issue' : 'pr',
+      number: hit.number,
+      title: typeof hit.title === 'string' ? hit.title : '',
+      url: hit.html_url,
+      state: typeof hit.state === 'string' ? hit.state : 'unknown',
+    })
+  }
+  return { items, error: null, authenticated: true }
+}

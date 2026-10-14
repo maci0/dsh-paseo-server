@@ -11,6 +11,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { dirname } from 'node:path'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
@@ -585,4 +586,85 @@ export async function mergeRef(
   const args = strategy === 'squash' ? ['merge', '--squash', baseRef] : ['merge', '--no-edit', baseRef]
   const merged = await gitResult(directory, args)
   return merged.ok ? { success: true } : { success: false, error: describe(merged, 'merging failed') }
+}
+
+/** One git worktree. */
+export interface WorktreeEntry {
+  readonly path: string
+  readonly branch: string | null
+  readonly head: string | null
+}
+
+/** List the worktrees of one repository. */
+export async function listWorktrees(directory: string): Promise<readonly WorktreeEntry[]> {
+  const output = await git(directory, ['worktree', 'list', '--porcelain'])
+  if (output === null) return []
+  const entries: WorktreeEntry[] = []
+  let current: { path?: string; branch?: string; head?: string } = {}
+  const flush = (): void => {
+    if (current.path === undefined) return
+    entries.push({
+      path: current.path,
+      branch: current.branch?.replace('refs/heads/', '') ?? null,
+      head: current.head ?? null,
+    })
+    current = {}
+  }
+  for (const line of output.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      flush()
+      current.path = line.slice('worktree '.length)
+      continue
+    }
+    if (line.startsWith('HEAD ')) { current.head = line.slice('HEAD '.length); continue }
+    if (line.startsWith('branch ')) { current.branch = line.slice('branch '.length); continue }
+  }
+  flush()
+  return entries
+}
+
+/**
+ * Add one worktree beside its repository.
+ *
+ * The branch is created from the requested ref when it does not exist, which is
+ * what a client asking for a new workspace on a new branch means.
+ * @param directory - repository directory.
+ * @param input - destination path, branch name, and the ref to branch from.
+ * @returns the created worktree, or why it was refused.
+ */
+export async function addWorktree(
+  directory: string,
+  input: { readonly path: string; readonly branch: string; readonly from?: string },
+): Promise<{ readonly entry: WorktreeEntry } | { readonly error: string }> {
+  const existing = await git(directory, ['rev-parse', '--verify', '--quiet', `refs/heads/${input.branch}`])
+  const args = existing === null
+    ? ['worktree', 'add', '-b', input.branch, input.path, input.from ?? 'HEAD']
+    : ['worktree', 'add', input.path, input.branch]
+  const added = await gitResult(directory, args)
+  if (!added.ok) return { error: summarize(added.stderr || added.stdout, 'adding the worktree failed') }
+  return { entry: { path: input.path, branch: input.branch, head: null } }
+}
+
+/** Remove one worktree, refusing while it still has changes. */
+export async function removeWorktree(directory: string, path: string, force: boolean): Promise<GitOperationResult> {
+  const args = force ? ['worktree', 'remove', '--force', path] : ['worktree', 'remove', path]
+  const removed = await gitResult(directory, args)
+  return removed.ok ? { success: true } : { success: false, error: describe(removed, 'removing the worktree failed') }
+}
+
+/**
+ * Clone one repository into a target directory.
+ *
+ * The clone runs with the daemon's own git configuration, and a failure is
+ * reported as git explained it rather than as a generic error.
+ * @param repo - repository in `owner/name` form, cloned over https.
+ * @param target - directory to clone into.
+ * @returns the outcome.
+ */
+export async function cloneRepository(repo: string, target: string): Promise<GitOperationResult> {
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) {
+    return { success: false, error: { code: 'UNKNOWN', message: 'a repository must be named owner/name' } }
+  }
+  const cloned = await gitResult(dirname(target), ['clone', `https://github.com/${repo}.git`, target])
+  return cloned.ok ? { success: true } : { success: false, error: describe(cloned, 'cloning failed') }
 }

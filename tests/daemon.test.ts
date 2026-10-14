@@ -7,6 +7,9 @@
  */
 
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { scratchDir } from './scratch.ts'
 import { test } from 'node:test'
 import { PaseoDaemon } from '../src/paseo/daemon.ts'
 import type { AgentRecord, BridgeEvent, PaseoBridge, WorkspaceRecord } from '../src/bridge.ts'
@@ -68,6 +71,15 @@ function fakeBridge() {
     async sendPrompt(agentId, prompt) { prompts.push({ agentId, text: prompt.text, images: prompt.images ?? [] }) },
     async createAgent(input) { created.push(input); return agent({ id: 'ses_new', workspaceId: 'ws_1' }) },
     async cancelAgent() {},
+    async renameAgent() {},
+    async listCommands() { return [] },
+    async selectAgentThinking() {},
+    async runWorkspaceSetup() { return true },
+    async workspaceSetupStatus() { return null },
+    async createDirectory() { return { path: '/new' } },
+    async cloneRepository() { return { error: 'unused' } },
+    async searchRepositories() { return { repositories: [], error: null, authenticated: true } },
+    async searchForge() { return { items: [], error: null, authenticated: true } },
     async archiveAgent() { return new Date().toISOString() },
     async checkoutStatus() { return { isGit: false, repoRoot: null, currentBranch: null, isDirty: false, hasRemote: false, remoteUrl: null, upstreamRef: null, aheadOfOrigin: null, behindOfOrigin: null } },
     async checkoutDiff() { return [] },
@@ -88,7 +100,17 @@ function fakeBridge() {
     async mergeRef() { return { success: true } },
     async listDirectory() { return [] },
     async readWorkspaceFile() { return null },
+    async writeWorkspaceFile() { return { status: 'written', modifiedAt: '2026-01-01T00:00:00.000Z', size: 1 } },
+    async createEntry() { return { path: 'new.txt' } },
+    async renameEntry() { return { path: 'renamed.txt' } },
+    async duplicateEntry() { return { path: 'copy.txt' } },
+    async deleteEntry() { return { ok: true } },
+    async statEntry() { return { size: 1, modifiedAt: '2026-01-01T00:00:00.000Z' } },
+    async beginUpload() { return { id: 'upload_1', fileName: 'a.png', mimeType: 'image/png', path: '/tmp/a.png', expectedSize: 3, received: 0, started: false } },
     async deleteWorkspace() { return true },
+    async listWorktrees() { return [] },
+    async createWorktree() { return { error: 'unused' } },
+    async removeWorktree() { return { success: true } },
     async setWorkspacePinned() { return null },
     async suggestPaths() { return [] },
     async readProjectConfig() { return null },
@@ -143,6 +165,9 @@ function connect(daemon: PaseoDaemon) {
     },
     request(message: Record<string, unknown>) {
       handlers.receive(JSON.stringify({ type: 'session', message }))
+    },
+    binary(bytes: Uint8Array) {
+      connection.receiveBinary(bytes)
     },
     /** The last message the daemon sent. */
     last(): Record<string, unknown> {
@@ -748,4 +773,251 @@ test('the subagent surface lists sessions a parent spawned', async () => {
   assert.equal(list[0]?.id, 'ses_child')
   assert.equal(list[0]?.parentAgentId, 'ses_1')
   assert.equal(list[0]?.status, 'completed')
+})
+
+test('fs.file.write.request answers with the write result', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'fs.file.write.request', requestId: 'r1', cwd: '/repo', path: 'a.txt', content: 'x', expectedModifiedAt: '2026-01-01T00:00:00.000Z' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'fs.file.write.response')
+  assert.equal((payload.result as Record<string, unknown>).status, 'written')
+})
+
+test('fs.entry.delete.request answers with the entry path', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'fs.entry.delete.request', requestId: 'r1', cwd: '/repo', path: 'a.txt' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'fs.entry.delete.response')
+  assert.equal(payload.path, 'a.txt')
+  assert.equal(payload.success, true)
+})
+
+test('file.upload.request waits for the chunks before answering', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'file.upload.request', requestId: 'r1', fileName: 'a.png', mimeType: 'image/png', size: 3 })
+  await client.settle()
+  // No response yet: the upload response follows the last chunk.
+  const responses = client.payloads('file.upload.response')
+  assert.equal(responses.length, 0)
+})
+
+test('file_download_token_request refuses a path outside the workspace', async () => {
+  const { bridge } = fakeBridge()
+  // The bridge is the filesystem authority: an escaping path has no stat.
+  const guarded: PaseoBridge = { ...bridge, statEntry: async (_cwd, path) => path.includes('..') ? null : { size: 1, modifiedAt: '2026-01-01T00:00:00.000Z' } }
+  const client = connect(makeDaemon(guarded))
+  client.hello()
+  client.request({ type: 'file_download_token_request', requestId: 'r1', cwd: '/repo', path: '../../etc/passwd' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'file_download_token_response')
+  assert.equal(payload.token, null)
+  assert.match(String(payload.error), /unreadable/)
+})
+
+test('an upload writes its chunks in order and answers when it ends', async () => {
+  const { bridge } = fakeBridge()
+  const root = scratchDir('upload')
+  const target = {
+    id: 'upload_test',
+    fileName: 'uploaded.txt',
+    mimeType: 'text/plain',
+    path: join(root, 'uploaded.txt'),
+    expectedSize: 9,
+    received: 0,
+    started: false,
+  }
+  const uploading: PaseoBridge = { ...bridge, beginUpload: async () => target }
+  const client = connect(makeDaemon(uploading))
+  client.hello()
+  client.request({
+    type: 'file.upload.request',
+    requestId: 'req_1',
+    fileName: 'uploaded.txt',
+    mimeType: 'text/plain',
+    size: 9,
+    modifiedAt: new Date().toISOString(),
+  })
+  await client.settle()
+
+  const requestId = 'req_1'
+  const begin = new Uint8Array(4 + requestId.length + 80)
+  const idBytes = new TextEncoder().encode(requestId)
+  const metadata = new TextEncoder().encode(JSON.stringify({
+    mime: 'text/plain',
+    size: 9,
+    encoding: 'utf-8',
+    modifiedAt: new Date().toISOString(),
+    fileName: 'uploaded.txt',
+  }))
+  const frame = new Uint8Array(4 + idBytes.length + metadata.length)
+  frame[0] = 0x10
+  frame[1] = idBytes.length
+  frame.set(idBytes, 2)
+  new DataView(frame.buffer).setUint16(2 + idBytes.length, metadata.length)
+  frame.set(metadata, 4 + idBytes.length)
+  void begin
+
+  const chunk = new Uint8Array(2 + idBytes.length + 9)
+  chunk[0] = 0x11
+  chunk[1] = idBytes.length
+  chunk.set(idBytes, 2)
+  chunk.set(new TextEncoder().encode('chunk one'), 2 + idBytes.length)
+
+  const end = new Uint8Array(2 + idBytes.length)
+  end[0] = 0x12
+  end[1] = idBytes.length
+  end.set(idBytes, 2)
+
+  client.binary(frame)
+  client.binary(chunk)
+  client.binary(end)
+  // The frames are applied in a chain of file writes, so the answer arrives
+  // after real I/O rather than on the next tick.
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline && client.payloads('file.upload.response').length === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+
+  const responses = client.payloads('file.upload.response')
+  assert.equal(responses.length, 1)
+  assert.equal(responses[0]?.error, null)
+  assert.equal((responses[0]?.file as Record<string, unknown>).fileName, 'uploaded.txt')
+  assert.equal(await readFile(target.path, 'utf8'), 'chunk one')
+})
+
+test('fetch_agent_history_request pages the directory', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'fetch_agent_history_request', requestId: 'r1', page: { limit: 1 } })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'fetch_agent_history_response')
+  assert.ok(Array.isArray(payload.entries))
+  assert.equal((payload.pageInfo as Record<string, unknown>).hasMore, false)
+})
+
+test('update_agent_request answers with the renamed agent', async () => {
+  const { bridge } = fakeBridge()
+  let renamed: { id: string; title: string } | null = null
+  const renaming: PaseoBridge = { ...bridge, renameAgent: async (id, title) => { renamed = { id, title } } }
+  const client = connect(makeDaemon(renaming))
+  client.hello()
+  client.request({ type: 'update_agent_request', requestId: 'r1', agentId: 'ses_1', name: '  new name  ' })
+  await client.settle()
+  assert.deepEqual(renamed, { id: 'ses_1', title: 'new name' })
+  assert.equal(client.last().type, 'update_agent_response')
+})
+
+test('abort_request cancels the named agent', async () => {
+  const { bridge } = fakeBridge()
+  let cancelled: string | null = null
+  const cancelling: PaseoBridge = { ...bridge, cancelAgent: async (id) => { cancelled = id } }
+  const client = connect(makeDaemon(cancelling))
+  client.hello()
+  client.request({ type: 'abort_request', requestId: 'r1', agentId: 'ses_1' })
+  await client.settle()
+  assert.equal(cancelled, 'ses_1')
+  assert.equal(client.last().type, 'abort_response')
+})
+
+test('timeline search and prompt listing answer for one agent', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'agent.timeline.search.request', requestId: 'r1', agentId: 'ses_1', query: 'hello' })
+  await client.settle()
+  assert.equal(client.last().type, 'agent.timeline.search.response')
+  assert.ok(Array.isArray((client.last().payload as Record<string, unknown>).locations))
+
+  client.request({ type: 'agent.timeline.list_prompts.request', requestId: 'r2', agentId: 'ses_1' })
+  await client.settle()
+  assert.equal(client.last().type, 'agent.timeline.list_prompts.response')
+})
+
+test('fs.file.subscribe.request opens a watch and unsubscribe closes it', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'fs.file.subscribe.request', requestId: 'r1', cwd: '/repo', path: 'a.txt', subscriptionId: 'sub_1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'fs.file.subscribe.response')
+  assert.equal(payload.subscriptionId, 'sub_1')
+  assert.equal((payload.initial as Record<string, unknown>).status, 'ready')
+
+  client.request({ type: 'fs.file.unsubscribe.request', requestId: 'r2', subscriptionId: 'sub_1' })
+  await client.settle()
+  assert.equal(client.last().type, 'fs.file.unsubscribe.response')
+})
+
+test('a refused surface answers with its own response type and the reason', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'agent.rewind.request', requestId: 'r1', agentId: 'ses_1', messageId: 'm1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'agent.rewind.response')
+  assert.equal(payload.ok, false)
+  assert.match(String(payload.error), /append-only/)
+})
+
+test('restart_server_request refuses without stopping anything', async () => {
+  const { bridge } = fakeBridge()
+  const daemon = makeDaemon(bridge)
+  const client = connect(daemon)
+  client.hello()
+  client.request({ type: 'restart_server_request', requestId: 'r1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'restart_server_response')
+  assert.match(String(payload.error), /restart dsh web/)
+  assert.equal(daemon.size, 1)
+})
+
+test('an unknown request still draws a protocol error', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'not_a_real_request', requestId: 'r1' })
+  await client.settle()
+  assert.equal(client.last().type, 'rpc_error')
+})
+
+test('list_commands_request answers with the agent commands', async () => {
+  const { bridge } = fakeBridge()
+  const commanding: PaseoBridge = {
+    ...bridge,
+    listCommands: async () => [{ name: 'compact', description: 'Compact the session', argumentHint: '' }],
+  }
+  const client = connect(makeDaemon(commanding))
+  client.hello()
+  client.request({ type: 'list_commands_request', requestId: 'r1', agentId: 'ses_1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'list_commands_response')
+  assert.equal((payload.commands as readonly Record<string, unknown>[])[0]?.name, 'compact')
+})
+
+test('diagnostics reports what the daemon is doing', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'diagnostics.request', requestId: 'r1' })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'diagnostics.response')
+  assert.equal(payload.connectedClients, 1)
+  assert.equal(payload.protocolVersion, 1)
+  assert.ok(typeof payload.uptimeSeconds === 'number')
 })

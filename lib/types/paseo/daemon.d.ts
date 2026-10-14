@@ -5,6 +5,7 @@
  * @module dsh-paseo-server/paseo/daemon
  */
 import type { AgentRecord, PaseoBridge } from '../bridge.ts';
+import type { DownloadGrant } from '../dsh/files.ts';
 import type { WireSocket } from './transport.ts';
 /** Minimal logger surface; matches Cordis `ctx.logger`. */
 export interface Logger {
@@ -47,6 +48,15 @@ export declare class PaseoDaemon {
     /** Number of admitted clients, for diagnostics. */
     get size(): number;
     /**
+     * Redeem one download token.
+     *
+     * The token is single use, so a second request for the same one is refused
+     * even while the first is still streaming.
+     * @param token - token from the download URL.
+     * @returns the grant, or null when it is unknown or expired.
+     */
+    takeDownload(token: string): DownloadGrant | null;
+    /**
      * Admit one transport socket as a Paseo client.
      *
      * The transport owns its own listeners and drives this handle: it calls
@@ -56,7 +66,12 @@ export declare class PaseoDaemon {
      * @returns the connection handle for that socket.
      */
     attach(socket: WireSocket, host?: string): PaseoConnection;
-    /** Route one inbound terminal stream frame. */
+    /**
+     * Route one inbound binary frame.
+     *
+     * Terminals and uploads share this channel, so the opcode decides which
+     * handler sees the frame.
+     */
     private onBinaryFrame;
     /** Route one inbound text frame. */
     private onFrame;
@@ -65,6 +80,12 @@ export declare class PaseoDaemon {
     private readonly workspaceCache;
     /** Last known descriptor of every terminal, for change notifications. */
     private readonly terminalCache;
+    /** Configuration facts the harness knows about this daemon. */
+    private daemonConfig;
+    /** Instant this daemon started, for the diagnostics snapshot. */
+    private readonly startedAt;
+    /** Outstanding download tokens, redeemed by the HTTP route. */
+    private readonly downloads;
     /** Pending `wait_for_finish_request` waiters, keyed by agent id. */
     private readonly waiters;
     /** Resolve when an agent settles, or after the client's timeout. */
@@ -101,12 +122,27 @@ export declare class PaseoDaemon {
     private workspaceIdForDirectory;
     /** Claim the lowest free stream slot for one terminal on this connection. */
     private allocateSlot;
+    /** Current version of one file, as the watch frames report it. */
+    private fileVersion;
+    /**
+     * Watch one file by polling it.
+     *
+     * There is no portable file watch in the harness, so a subscription re-reads
+     * the file's size and modification time and reports only a change.
+     */
+    private watchFile;
+    /** Stop one file watch. */
+    private stopFileWatch;
     /** End one terminal's stream on this connection and release its slot. */
     private stopTerminalStream;
     /** Send one terminal frame, preferring the binary stream the client subscribed to. */
     private sendTerminalEvent;
     private sendTerminalBytes;
     private publishTerminalState;
+    /** Apply one upload frame against the upload this client already began. */
+    private onTransferFrame;
+    /** Drop a failed upload and tell the client why. */
+    private failUpload;
     /** Apply one JSON terminal input, which is the client's non-stream input path. */
     private applyTerminalInput;
     private knownDirectory;

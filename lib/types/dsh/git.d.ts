@@ -166,3 +166,41 @@ export declare function listCommits(directory: string, limit?: number): Promise<
 export declare function commitFileDiff(directory: string, sha: string, path: string): Promise<readonly DiffFile[]>;
 /** Merge a ref into the current branch. */
 export declare function mergeRef(directory: string, baseRef: string, strategy: 'merge' | 'squash'): Promise<GitOperationResult>;
+/** One git worktree. */
+export interface WorktreeEntry {
+    readonly path: string;
+    readonly branch: string | null;
+    readonly head: string | null;
+}
+/** List the worktrees of one repository. */
+export declare function listWorktrees(directory: string): Promise<readonly WorktreeEntry[]>;
+/**
+ * Add one worktree beside its repository.
+ *
+ * The branch is created from the requested ref when it does not exist, which is
+ * what a client asking for a new workspace on a new branch means.
+ * @param directory - repository directory.
+ * @param input - destination path, branch name, and the ref to branch from.
+ * @returns the created worktree, or why it was refused.
+ */
+export declare function addWorktree(directory: string, input: {
+    readonly path: string;
+    readonly branch: string;
+    readonly from?: string;
+}): Promise<{
+    readonly entry: WorktreeEntry;
+} | {
+    readonly error: string;
+}>;
+/** Remove one worktree, refusing while it still has changes. */
+export declare function removeWorktree(directory: string, path: string, force: boolean): Promise<GitOperationResult>;
+/**
+ * Clone one repository into a target directory.
+ *
+ * The clone runs with the daemon's own git configuration, and a failure is
+ * reported as git explained it rather than as a generic error.
+ * @param repo - repository in `owner/name` form, cloned over https.
+ * @param target - directory to clone into.
+ * @returns the outcome.
+ */
+export declare function cloneRepository(repo: string, target: string): Promise<GitOperationResult>;

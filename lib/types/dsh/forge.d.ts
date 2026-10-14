@@ -144,3 +144,45 @@ export declare function readCheckDetails(remote: GithubRemote, token: string | u
     readonly details: CheckDetails | null;
     readonly error: string | null;
 }>;
+/** One repository a search returned. */
+export interface RepositoryHit {
+    readonly id: string;
+    readonly name: string;
+    readonly nameWithOwner: string;
+    readonly description: string | null;
+    readonly visibility: 'public' | 'private' | 'internal';
+    readonly updatedAt: string;
+    readonly cloneUrl: string;
+}
+/** One issue or pull request a search returned. */
+export interface ForgeHit {
+    readonly kind: 'issue' | 'pr';
+    readonly number: number;
+    readonly title: string;
+    readonly url: string;
+    readonly state: string;
+}
+/**
+ * Search repositories the token can see.
+ * @param query - search text.
+ * @param limit - most results to return.
+ * @param token - forge token.
+ * @returns the repositories, and why the search could not run.
+ */
+export declare function searchRepositories(query: string, limit: number, token: string | undefined): Promise<{
+    readonly repositories: readonly RepositoryHit[];
+    readonly error: string | null;
+    readonly authenticated: boolean;
+}>;
+/**
+ * Search issues and pull requests across the repositories the token can see.
+ * @param query - search text.
+ * @param limit - most results to return.
+ * @param token - forge token.
+ * @returns the hits, and why the search could not run.
+ */
+export declare function searchIssuesAndPulls(query: string, limit: number, token: string | undefined): Promise<{
+    readonly items: readonly ForgeHit[];
+    readonly error: string | null;
+    readonly authenticated: boolean;
+}>;

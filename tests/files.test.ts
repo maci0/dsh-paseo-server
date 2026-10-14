@@ -10,12 +10,19 @@ import { test } from 'node:test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  createEntry,
+  deleteEntry,
+  duplicateEntry,
+  entryExists,
   listDirectory,
   readProjectConfig,
   readWorkspaceFile,
+  renameEntry,
   resolveInside,
+  statEntry,
   suggestPaths,
   writeProjectConfig,
+  writeWorkspaceFile,
 } from '../src/dsh/files.ts'
 import { scratchDir } from './scratch.ts'
 
@@ -108,4 +115,52 @@ test('a project config write refuses a non-object document', async () => {
   const root = scratchDir('project-config-invalid')
   assert.deepEqual(await writeProjectConfig(root, 'nope', null), { error: 'invalid_project_config' })
   assert.deepEqual(await writeProjectConfig(root, [1, 2], null), { error: 'invalid_project_config' })
+})
+
+test('a file write refuses a stale modification time', async () => {
+  const root = scratchDir('files-write')
+  await writeFile(join(root, 'a.txt'), 'first\n')
+  const initial = await statEntry(root, 'a.txt')
+  assert.ok(initial !== null)
+  // A revision the client never read is a conflict, whatever the clock's
+  // resolution did between the two writes.
+  const stale = await writeWorkspaceFile(root, 'a.txt', 'third\n', new Date(0).toISOString())
+  assert.equal(stale.status, 'conflict')
+  const written = await writeWorkspaceFile(root, 'a.txt', 'second\n', initial.modifiedAt)
+  assert.equal(written.status, 'written')
+  assert.equal((await readWorkspaceFile(root, 'a.txt'))?.content, 'second\n')
+})
+
+test('a write outside the workspace is refused', async () => {
+  const root = scratchDir('files-write-escape')
+  const outcome = await writeWorkspaceFile(root, '../escape.txt', 'x', new Date(0).toISOString())
+  assert.equal(outcome.status, 'error')
+})
+
+test('entries create, rename, duplicate, and delete', async () => {
+  const root = scratchDir('files-entries')
+  const created = await createEntry(root, '', 'notes', 'directory')
+  assert.deepEqual(created, { path: 'notes' })
+  await writeFile(join(root, 'notes', 'a.txt'), 'a\n')
+
+  const renamed = await renameEntry(root, 'notes/a.txt', 'b.txt')
+  assert.deepEqual(renamed, { path: 'notes/b.txt' })
+
+  const duplicated = await duplicateEntry(root, 'notes/b.txt')
+  assert.deepEqual(duplicated, { path: 'notes/b copy.txt' })
+
+  assert.deepEqual(await deleteEntry(root, 'notes/b copy.txt'), { ok: true })
+  assert.equal(await entryExists(root, 'notes/b copy.txt'), false)
+  assert.equal(await entryExists(root, 'notes/b.txt'), true)
+})
+
+test('an entry name with a separator is refused', async () => {
+  const root = scratchDir('files-entries-name')
+  assert.deepEqual(await createEntry(root, '', 'a/b', 'file'), { error: 'a name must be one path segment' })
+  assert.deepEqual(await renameEntry(root, '.', '../x'), { error: 'a name must be one path segment' })
+})
+
+test('the workspace root is not deletable', async () => {
+  const root = scratchDir('files-root-delete')
+  assert.deepEqual(await deleteEntry(root, ''), { error: 'the workspace root cannot be deleted' })
 })

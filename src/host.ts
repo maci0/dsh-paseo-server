@@ -148,6 +148,18 @@ export interface WorkspaceLike {
   readonly sessionIds: readonly string[]
 }
 
+/** One slash command an agent can run. */
+export interface CommandDescriptorLike {
+  readonly name: string
+  readonly description: string
+  readonly input?: { readonly hint?: string }
+}
+
+/** Slash command runtime, which resolves the commands one agent sees. */
+export interface CommandsLike {
+  list(agent: unknown): readonly CommandDescriptorLike[]
+}
+
 /** One durable reminder, with the rule fields the service stores. */
 export interface ScheduleRecordLike {
   readonly id: string

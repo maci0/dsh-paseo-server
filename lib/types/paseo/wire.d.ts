@@ -7,9 +7,10 @@
  *
  * @module dsh-paseo-server/paseo/wire
  */
-import type { DirectoryEntry, FileContent } from '../dsh/files.ts';
-import type { CheckDetails, ForgeWriteResult, PullRequestLookup, PullRequestTimelineItem } from '../dsh/forge.ts';
-import type { BranchEntry, CommitEntry, DiffFile, GitStatus, StashEntry } from '../dsh/git.ts';
+import type { DirectoryEntry, FileContent, WriteOutcome } from '../dsh/files.ts';
+import type { CheckDetails, ForgeHit, ForgeWriteResult, PullRequestLookup, PullRequestTimelineItem, RepositoryHit } from '../dsh/forge.ts';
+import type { BranchEntry, CommitEntry, DiffFile, GitStatus, StashEntry, WorktreeEntry } from '../dsh/git.ts';
+import type { PromptPreview, SearchLocation } from './directory.ts';
 import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord, ScheduleRecord, WorkspaceScriptRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
 export declare const PASEO_PROTOCOL_VERSION = 1;
@@ -83,6 +84,8 @@ export declare function agentsResponse(requestId: string, subscriptionId: string
 }[]): Record<string, unknown>;
 /** `fetch_agent_response`. */
 export declare function agentResponse(requestId: string, agent: AgentRecord | null, workspace: WorkspaceRecord | null, error: string | null): Record<string, unknown>;
+/** `update_agent_response`, which carries the agent after the change. */
+export declare function agentUpdateResponse(requestId: string, agent: AgentRecord | null, workspace: WorkspaceRecord | null, error: string | null): Record<string, unknown>;
 /** `fetch_agent_timeline_response`. */
 export declare function timelineResponse(requestId: string, agent: AgentRecord, epoch: string, entries: readonly TimelineEntry[]): Record<string, unknown>;
 /** `send_agent_message_response`. */
@@ -283,3 +286,99 @@ export declare function forkContextResponse(requestId: string, agentId: string, 
 }): Record<string, unknown>;
 /** `agent.provider_subagents.list.response`. */
 export declare function subagentList(requestId: string, parentAgentId: string, subagents: readonly AgentRecord[]): Record<string, unknown>;
+/** `fs.file.write.response` for a write result. */
+export declare function fileWriteResponse(requestId: string, outcome: WriteOutcome): Record<string, unknown>;
+/** One `fs.entry.*` response. */
+export declare function entryResponse(type: 'fs.entry.create.response' | 'fs.entry.rename.response' | 'fs.entry.duplicate.response' | 'fs.entry.delete.response', requestId: string, directory: string, path: string, outcome: {
+    readonly path?: string;
+    readonly ok?: true;
+    readonly error?: string;
+}): Record<string, unknown>;
+/** `file_download_token_response`. */
+export declare function downloadGrantResponse(requestId: string, directory: string, path: string, grant: {
+    readonly token: string;
+    readonly fileName: string;
+    readonly mimeType: string;
+    readonly size: number;
+} | null, error: string | null): Record<string, unknown>;
+/** `file.upload.response`, sent once the last chunk landed. */
+export declare function uploadResponse(requestId: string, target: {
+    readonly id: string;
+    readonly fileName: string;
+    readonly mimeType: string;
+    readonly expectedSize: number;
+    readonly path: string;
+} | null, error: string | null): Record<string, unknown>;
+/** `fetch_agent_history_response`, the paginated directory. */
+export declare function agentHistory(requestId: string, rows: readonly {
+    readonly agent: AgentRecord;
+    readonly workspace: WorkspaceRecord;
+}[], nextCursor: string | null, hasMore: boolean): Record<string, unknown>;
+/** `agent.timeline.search.response`. */
+export declare function timelineSearchResult(requestId: string, agentId: string, epoch: string, result: {
+    readonly locations: readonly SearchLocation[];
+    readonly nextCursor: number | null;
+}): Record<string, unknown>;
+/** `agent.timeline.list_prompts.response`. */
+export declare function timelinePrompts(requestId: string, agentId: string, epoch: string, prompts: readonly PromptPreview[]): Record<string, unknown>;
+/** `fs.file.subscribe.response`, opening a file watch. */
+export declare function fileSubscribed(requestId: string, subscriptionId: string, version: {
+    readonly status: 'ready';
+    readonly cwd: string;
+    readonly path: string;
+    readonly size: number;
+    readonly modifiedAt: string;
+} | {
+    readonly status: 'missing';
+    readonly cwd: string;
+    readonly path: string;
+}): Record<string, unknown>;
+/** `fs.file.update`, sent when a watched file changed. */
+export declare function fileUpdated(subscriptionId: string, version: Record<string, unknown>): Record<string, unknown>;
+/** `fs.file.unsubscribe.response`. */
+export declare function fileUnsubscribed(requestId: string, subscriptionId: string): Record<string, unknown>;
+/** `agent.provider_subagents.timeline.get.response`, the child session's rows. */
+export declare function subagentTimeline(requestId: string, parentAgentId: string, subagentId: string, provider: string, entries: readonly TimelineEntry[], error: string | null): Record<string, unknown>;
+/** `workspace.setup.run.response`. */
+export declare function workspaceSetupStarted(requestId: string, workspaceId: string, started: boolean, error: string | null): Record<string, unknown>;
+/** `workspace_setup_status_response`, which reports no setup when none ran. */
+export declare function workspaceSetupStatus(requestId: string, workspaceId: string, snapshot: Record<string, unknown> | null): Record<string, unknown>;
+/** `paseo_worktree_list_response`. */
+export declare function worktreeList(requestId: string, worktrees: readonly WorktreeEntry[]): Record<string, unknown>;
+/** `create_paseo_worktree_response`. */
+export declare function worktreeCreated(requestId: string, workspace: WorkspaceRecord | null, error: string | null): Record<string, unknown>;
+/** `paseo_worktree_archive_response`. */
+export declare function worktreeArchived(requestId: string, success: boolean, error: string | null): Record<string, unknown>;
+/** `list_commands_response`. */
+export declare function commandList(requestId: string, agentId: string, commands: readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly argumentHint: string;
+}[]): Record<string, unknown>;
+/** `diagnostics.response`, a snapshot of what this daemon is doing. */
+export declare function diagnosticsResponse(requestId: string, facts: Record<string, unknown>): Record<string, unknown>;
+/** `get_daemon_config_response`. */
+export declare function daemonConfigResponse(requestId: string, config: Record<string, unknown>, error?: string | null): Record<string, unknown>;
+/** `project.create_directory.response`. */
+export declare function projectDirectoryCreated(requestId: string, path: string | null, workspace: WorkspaceRecord | null, error: string | null): Record<string, unknown>;
+/** `project.github.clone.response`. */
+export declare function projectCloned(requestId: string, repo: string, checkoutPath: string | null, workspace: WorkspaceRecord | null, error: string | null): Record<string, unknown>;
+/**
+ * Surfaces this daemon refuses on purpose, with the reason a client shows.
+ *
+ * Each entry maps a request to the response type its client waits for. The
+ * alternative, a generic protocol error, tells the operator nothing about why
+ * the action is missing.
+ */
+export declare const REFUSED_REQUESTS: Readonly<Record<string, {
+    readonly response: string;
+    readonly reason: string;
+}>>;
+/** One refusal frame for a request whose surface this daemon does not offer. */
+export declare function refusalResponse(response: string, requestId: string, reason: string): Record<string, unknown>;
+/** `workspace.github.search_repositories.response`. */
+export declare function repositorySearch(requestId: string, repositories: readonly RepositoryHit[], error: string | null, authenticated: boolean): Record<string, unknown>;
+/** `forge.search.response` and its legacy GitHub sibling. */
+export declare function forgeSearch(type: 'forge.search.response' | 'github_search_response', requestId: string, items: readonly ForgeHit[], error: string | null, authenticated: boolean): Record<string, unknown>;
+/** `refresh_providers_snapshot_response`, which acknowledges a re-read. */
+export declare function providersSnapshotRefreshed(requestId: string, acknowledged: boolean): Record<string, unknown>;

@@ -64,3 +64,33 @@ export async function readWorkspaceScripts(directory: string): Promise<readonly 
   }
   return definitions
 }
+
+/**
+ * The worktree setup command a workspace declares.
+ *
+ * Paseo runs `worktree.setup` when it creates a worktree; this daemon runs the
+ * same declaration when a client asks for the workspace's setup.
+ * @param directory - workspace directory.
+ * @returns the command, or null when none is declared.
+ */
+export async function readWorktreeSetup(directory: string): Promise<string | null> {
+  let raw: string
+  try {
+    raw = await readFile(join(directory, SCRIPT_FILE), 'utf8')
+  } catch {
+    return null
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (parsed === null || typeof parsed !== 'object') return null
+  const worktree = (parsed as { worktree?: unknown }).worktree
+  if (worktree === null || typeof worktree !== 'object') return null
+  const setup = (worktree as { setup?: unknown }).setup
+  const commands = typeof setup === 'string' ? [setup] : Array.isArray(setup) ? setup : []
+  const first = commands.find((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+  return first === undefined || first.length > MAX_COMMAND_CHARS ? null : first.trim()
+}

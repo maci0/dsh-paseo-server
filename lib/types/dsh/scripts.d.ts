@@ -22,3 +22,12 @@ export interface WorkspaceScriptDefinition {
  * @returns the declarations, empty when the file is absent or unreadable.
  */
 export declare function readWorkspaceScripts(directory: string): Promise<readonly WorkspaceScriptDefinition[]>;
+/**
+ * The worktree setup command a workspace declares.
+ *
+ * Paseo runs `worktree.setup` when it creates a worktree; this daemon runs the
+ * same declaration when a client asks for the workspace's setup.
+ * @param directory - workspace directory.
+ * @returns the command, or null when none is declared.
+ */
+export declare function readWorktreeSetup(directory: string): Promise<string | null>;
