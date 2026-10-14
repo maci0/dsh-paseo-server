@@ -9,6 +9,7 @@
  * @module dsh-paseo-server
  */
 
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
@@ -22,6 +23,7 @@ import type { PairingInfo } from './paseo/pairing.ts'
 import { DEFAULT_RELAY_ENDPOINT, startRelayTransport } from './paseo/relay.ts'
 import type { RelayTransport } from './paseo/relay.ts'
 import { upgradeWebSocket } from './paseo/websocket.ts'
+import { DEFAULT_ALLOWED_ORIGINS, originAllowed, rejectUpgrade } from './paseo/origin.ts'
 import type { HostContext, WebServerLike } from './host.ts'
 import type { Volatile } from '@deepseek-ai/cordis'
 
@@ -46,8 +48,18 @@ export const ROUTE_HEALTH = '/api/health'
 /** WebSocket path the Paseo client connects to. */
 export const DEFAULT_WS_PATH = '/ws'
 
-/** Plugin version reported to clients. */
-export const VERSION = '0.1.0'
+/** Plugin version reported to clients, read from the package this build shipped. */
+export const VERSION = readPackageVersion()
+
+/** Read this package's own version, which a hardcoded constant would let drift. */
+function readPackageVersion(): string {
+  try {
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }
+    return manifest.version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
 
 /** Row values, as a profile patch states them and as direct callers pass them. */
 type Options = {
@@ -57,6 +69,7 @@ type Options = {
   relayEndpoint?: string
   relayUseTls?: boolean
   appBaseUrl?: string
+  allowedOrigins?: string[]
   passwordEnv?: string
   dataDir?: string
   defaultProvider?: string
@@ -77,6 +90,8 @@ export interface Config {
   readonly relayUseTls: Volatile<boolean>
   /** Paseo app origin that renders a pairing link. @default https://app.paseo.sh */
   readonly appBaseUrl: Volatile<string>
+  /** Browser origins allowed to open the Paseo socket. @default https://app.paseo.sh and paseo://app */
+  readonly allowedOrigins: Volatile<string[]>
   /** Environment variable holding the daemon password. @default PASEO_PASSWORD */
   readonly passwordEnv: Volatile<string>
   /** Directory holding the server id and key pair. @default $DSH_HOME/paseo-server */
@@ -93,6 +108,7 @@ const ValueSchema = Schema.object({
   wsPath: Schema.string().default(DEFAULT_WS_PATH),
   relayEnabled: Schema.boolean().default(true),
   relayEndpoint: Schema.string().default(DEFAULT_RELAY_ENDPOINT),
+  allowedOrigins: Schema.array(Schema.string()).default([...DEFAULT_ALLOWED_ORIGINS]),
   relayUseTls: Schema.boolean().default(true),
   appBaseUrl: Schema.string().default('https://app.paseo.sh'),
   passwordEnv: Schema.string().default('PASEO_PASSWORD'),
@@ -107,6 +123,7 @@ export const Config = Schema.object({
   wsPath: Schema.string().default(DEFAULT_WS_PATH).volatile(),
   relayEnabled: Schema.boolean().default(true).volatile(),
   relayEndpoint: Schema.string().default(DEFAULT_RELAY_ENDPOINT).volatile(),
+  allowedOrigins: Schema.array(Schema.string()).default([...DEFAULT_ALLOWED_ORIGINS]).volatile(),
   relayUseTls: Schema.boolean().default(true).volatile(),
   appBaseUrl: Schema.string().default('https://app.paseo.sh').volatile(),
   passwordEnv: Schema.string().default('PASEO_PASSWORD').volatile(),
@@ -132,6 +149,7 @@ export function resolveRow(row: Config | Options = {}): Required<Options> {
     relayEndpoint: readLive(row.relayEndpoint),
     relayUseTls: readLive(row.relayUseTls),
     appBaseUrl: readLive(row.appBaseUrl),
+    allowedOrigins: readLive(row.allowedOrigins) ?? [...DEFAULT_ALLOWED_ORIGINS],
     passwordEnv: readLive(row.passwordEnv),
     dataDir: readLive(row.dataDir),
     defaultProvider: readLive(row.defaultProvider),
@@ -190,9 +208,20 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
   let relay: RelayTransport | undefined
 
   if (webServer !== undefined) {
+    const listenerOrigin = webServer.host === undefined || webServer.port === undefined
+      ? undefined
+      : `${webServer.protocol ?? 'http:'}//${webServer.host}:${webServer.port}`
     ctx.effect(() => webServer.registerUpgrade({
       path: live().wsPath,
-      handler: (req, socket, head) => { upgradeWebSocket(daemon, sockets, req, socket, head) },
+      handler: (req, socket, head) => {
+        const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
+        if (!originAllowed(origin, live().allowedOrigins, listenerOrigin)) {
+          logger.warn(`paseo-server: refused an upgrade from origin ${String(origin)}`)
+          rejectUpgrade(socket)
+          return
+        }
+        upgradeWebSocket(daemon, sockets, req, socket, head)
+      },
     }), 'paseo-server: /ws upgrade')
 
     ctx.effect(() => webServer.register({

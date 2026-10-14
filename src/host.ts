@@ -143,6 +143,8 @@ export interface WebServerLike {
   readonly host?: string
   /** Bound listen port, when the listener reports one. */
   readonly port?: number
+  /** Listener scheme, `http:` or `https:`, when it reports one. */
+  readonly protocol?: string
 }
 
 /** The context surface this plugin reaches. */

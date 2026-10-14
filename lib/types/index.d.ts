@@ -25,8 +25,8 @@ export declare const ROUTE_STATUS = "/api/status";
 export declare const ROUTE_HEALTH = "/api/health";
 /** WebSocket path the Paseo client connects to. */
 export declare const DEFAULT_WS_PATH = "/ws";
-/** Plugin version reported to clients. */
-export declare const VERSION = "0.1.0";
+/** Plugin version reported to clients, read from the package this build shipped. */
+export declare const VERSION: string;
 /** Row values, as a profile patch states them and as direct callers pass them. */
 type Options = {
     enabled?: boolean;
@@ -35,6 +35,7 @@ type Options = {
     relayEndpoint?: string;
     relayUseTls?: boolean;
     appBaseUrl?: string;
+    allowedOrigins?: string[];
     passwordEnv?: string;
     dataDir?: string;
     defaultProvider?: string;
@@ -54,6 +55,8 @@ export interface Config {
     readonly relayUseTls: Volatile<boolean>;
     /** Paseo app origin that renders a pairing link. @default https://app.paseo.sh */
     readonly appBaseUrl: Volatile<string>;
+    /** Browser origins allowed to open the Paseo socket. @default https://app.paseo.sh and paseo://app */
+    readonly allowedOrigins: Volatile<string[]>;
     /** Environment variable holding the daemon password. @default PASEO_PASSWORD */
     readonly passwordEnv: Volatile<string>;
     /** Directory holding the server id and key pair. @default $DSH_HOME/paseo-server */
@@ -69,6 +72,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     wsPath: Schema<string, string, "volatile-defined">;
     relayEnabled: Schema<boolean, boolean, "volatile-defined">;
     relayEndpoint: Schema<string, string, "volatile-defined">;
+    allowedOrigins: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
     relayUseTls: Schema<boolean, boolean, "volatile-defined">;
     appBaseUrl: Schema<string, string, "volatile-defined">;
     passwordEnv: Schema<string, string, "volatile-defined">;
@@ -80,6 +84,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     wsPath: Schema<string, string, "volatile-defined">;
     relayEnabled: Schema<boolean, boolean, "volatile-defined">;
     relayEndpoint: Schema<string, string, "volatile-defined">;
+    allowedOrigins: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile-defined">;
     relayUseTls: Schema<boolean, boolean, "volatile-defined">;
     appBaseUrl: Schema<string, string, "volatile-defined">;
     passwordEnv: Schema<string, string, "volatile-defined">;

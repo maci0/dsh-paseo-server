@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.2.0
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.3.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -49,6 +49,7 @@ Every field is editable from the Plugins page.
 | `relayEndpoint` | `relay.paseo.sh:443` | Relay host and port. |
 | `relayUseTls` | `true` | Use TLS for the relay connection. |
 | `appBaseUrl` | `https://app.paseo.sh` | Origin the pairing link points at. |
+| `allowedOrigins` | `https://app.paseo.sh`, `paseo://app` | Browser origins allowed to open the Paseo socket. |
 | `passwordEnv` | `PASEO_PASSWORD` | Environment variable naming the daemon password; unset means no password. |
 | `dataDir` | `$DSH_HOME/paseo-server` | Server id and key pair. |
 | `defaultProvider` | `deepseek` | Provider reported when a session has no recorded header. |
@@ -65,6 +66,10 @@ is a timeline row.
 
 - Relay traffic is end-to-end encrypted with XSalsa20-Poly1305. The relay routes
   bytes and cannot read them.
+- A WebSocket handshake is not subject to the same-origin policy, so any page
+  the operator visits could otherwise reach the local port. An upgrade that
+  carries a foreign `Origin` is refused with 403; a native client sends no
+  origin and is admitted. `allowedOrigins` extends the list.
 - Whoever knows the server id can claim the daemon's control socket on the
   relay and deny service. Set `passwordEnv` to require a password on `hello`
   for defence in depth.
