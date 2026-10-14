@@ -8,7 +8,7 @@
  * @module dsh-paseo-server/bridge
  */
 
-import type { DiffCompare, DiffFile, GitStatus } from './dsh/git.ts'
+import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './dsh/git.ts'
 
 /** Disposer returned by every subscription. */
 export type Disposable = () => void
@@ -144,6 +144,12 @@ export interface PaseoBridge {
   checkoutStatus(directory: string): Promise<GitStatus>
   /** Parsed diff of one workspace directory against the requested comparison. */
   checkoutDiff(directory: string, compare: DiffCompare): Promise<readonly DiffFile[]>
+  /** Commit the working tree of one workspace directory. */
+  commitCheckout(directory: string, message: string | undefined, addAll: boolean): Promise<GitOperationResult>
+  /** Push the current branch of one workspace directory. */
+  pushCheckout(directory: string): Promise<GitOperationResult>
+  /** Fast-forward one workspace directory from its upstream. */
+  pullCheckout(directory: string): Promise<GitOperationResult>
   /** Archive an agent, removing it from the active list. Resolves the archive instant. */
   archiveAgent(agentId: string): Promise<string>
   /** Interrupt one agent's active turn, if any. */

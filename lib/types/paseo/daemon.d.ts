@@ -84,6 +84,13 @@ export declare class PaseoDaemon {
     private watchDiff;
     /** Drop one live diff subscription. */
     private stopDiffWatch;
+    /**
+     * Run one checkout write and build its response frame.
+     *
+     * The directory is already resolved to one this daemon advertised, and the
+     * commit message travels as its own argument, never through a shell.
+     */
+    private runCheckoutOperation;
     private knownDirectory;
     /** Push one bridge event to every admitted client. */
     private onBridgeEvent;

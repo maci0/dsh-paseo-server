@@ -6,7 +6,7 @@
  */
 
 import type { AgentRecord, BridgeEvent, PaseoBridge, WorkspaceRecord } from '../bridge.ts'
-import type { DiffCompare, DiffFile } from '../dsh/git.ts'
+import type { DiffCompare, DiffFile, GitOperationResult } from '../dsh/git.ts'
 import type { WireSocket } from './transport.ts'
 import {
   agentRemoved,
@@ -431,6 +431,23 @@ export class PaseoDaemon {
           if (subscriptionId !== undefined) this.stopDiffWatch(connection, subscriptionId)
           return
         }
+        case 'checkout_commit_request':
+        case 'checkout_push_request':
+        case 'checkout_pull_request':
+        case 'checkout.refresh.request': {
+          const directory = stringField(message, 'cwd')
+          if (directory === undefined) {
+            reply(rpcError(requestId, type, 'cwd is required', 'invalid_request'))
+            return
+          }
+          const known = await this.knownDirectory(directory)
+          if (known === null) {
+            reply(rpcError(requestId, type, `unknown workspace directory: ${directory}`, 'workspace_not_found'))
+            return
+          }
+          reply(await this.runCheckoutOperation(type, requestId, known, message))
+          return
+        }
         case 'daemon.get_status.request': {
           reply(daemonStatus({
             requestId,
@@ -581,6 +598,38 @@ export class PaseoDaemon {
     connection.diffWatches.delete(subscriptionId)
   }
 
+  /**
+   * Run one checkout write and build its response frame.
+   *
+   * The directory is already resolved to one this daemon advertised, and the
+   * commit message travels as its own argument, never through a shell.
+   */
+  private async runCheckoutOperation(
+    type: string,
+    requestId: string,
+    directory: string,
+    message: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const bridge = this.options.bridge
+    switch (type) {
+      case 'checkout_commit_request':
+        return checkoutOperationResponse(
+          type,
+          requestId,
+          directory,
+          await bridge.commitCheckout(directory, stringField(message, 'message'), message.addAll === true),
+        )
+      case 'checkout_push_request':
+        return checkoutOperationResponse(type, requestId, directory, await bridge.pushCheckout(directory))
+      case 'checkout_pull_request':
+        return checkoutOperationResponse(type, requestId, directory, await bridge.pullCheckout(directory))
+      default:
+        // Git reports its state on every read, so a refresh is an acknowledgement
+        // that tells the client to re-read status and diff.
+        return checkoutOperationResponse(type, requestId, directory, { success: true })
+    }
+  }
+
   private async knownDirectory(directory: string): Promise<string | null> {
     const cached = [...this.workspaceCache.values()].find((workspace) => workspace.directory === directory)
     if (cached !== undefined) return cached.directory
@@ -689,5 +738,26 @@ function compareOf(message: Record<string, unknown>): DiffCompare {
     mode: mode === 'base' ? 'base' : 'uncommitted',
     ...(baseRef === undefined ? {} : { baseRef }),
     ...(ignoreWhitespace ? { ignoreWhitespace: true } : {}),
+  }
+}
+
+/** Operation result frames a checkout write answers with. */
+function checkoutOperationResponse(
+  type: string,
+  requestId: string,
+  directory: string,
+  result: GitOperationResult,
+): Record<string, unknown> {
+  const responseType = type === 'checkout.refresh.request'
+    ? 'checkout.refresh.response'
+    : `${type.replace(/_request$/, '')}_response`
+  return {
+    type: responseType,
+    payload: {
+      cwd: directory,
+      success: result.success,
+      error: result.error === undefined ? null : { code: result.error.code, message: result.error.message },
+      requestId,
+    },
   }
 }

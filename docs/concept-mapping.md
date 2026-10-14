@@ -89,7 +89,6 @@ principle; this table tracks what is left.
 | Workspace scripts | The DSH job registry. |
 | Schedules and heartbeats | The DSH schedule plugin's own store. |
 | Agent delete | Session removal, once the persistence service exposes it. |
-| Git commit, push, pull | The `git` binary, as checkout status and diff already read it. |
 | Forge panels and pull requests | A forge client, which the harness does not ship. |
 
 ## Git surface
@@ -108,6 +107,16 @@ closes.
 
 Only directories this daemon advertised are read, so neither request can be
 used as a path probe into the operator's machine.
+
+Writes are the three the client offers. `checkout_commit_request` stages
+everything when the client asks for it, then commits with the client's message,
+or one derived from the changed paths when it supplied none.
+`checkout_push_request` pushes the current branch and sets its upstream on the
+first push; a force push is never attempted. `checkout_pull_request` runs
+`--ff-only`, so a pull that would need a merge reports `MERGE_CONFLICT` instead
+of creating a merge commit nobody asked for. `checkout.refresh.request`
+acknowledges, because git reports its state on every read and the client then
+re-reads status and diff.
 
 ## Deferred
 

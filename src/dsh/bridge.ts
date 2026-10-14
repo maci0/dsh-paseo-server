@@ -11,8 +11,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { readDiff, readGitStatus } from './git.ts'
-import type { DiffCompare, DiffFile, GitStatus } from './git.ts'
+import { commitCheckout, pullCheckout, pushCheckout, readDiff, readGitStatus } from './git.ts'
+import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './git.ts'
 import type {
   AgentRecord,
   AgentStatus,
@@ -159,6 +159,21 @@ class DshBridge implements PaseoBridge {
   /** Read one directory's parsed diff. */
   async checkoutDiff(directory: string, compare: DiffCompare): Promise<readonly DiffFile[]> {
     return readDiff(directory, compare)
+  }
+
+  /** Commit one directory's working tree. */
+  async commitCheckout(directory: string, message: string | undefined, addAll: boolean): Promise<GitOperationResult> {
+    return commitCheckout(directory, message, addAll)
+  }
+
+  /** Push one directory's current branch. */
+  async pushCheckout(directory: string): Promise<GitOperationResult> {
+    return pushCheckout(directory)
+  }
+
+  /** Fast-forward one directory from its upstream. */
+  async pullCheckout(directory: string): Promise<GitOperationResult> {
+    return pullCheckout(directory)
   }
 
   /** Archive one session, which removes it from the active agent list. */

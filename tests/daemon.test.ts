@@ -71,6 +71,9 @@ function fakeBridge() {
     async archiveAgent() { return new Date().toISOString() },
     async checkoutStatus() { return { isGit: false, repoRoot: null, currentBranch: null, isDirty: false, hasRemote: false, remoteUrl: null, upstreamRef: null, aheadOfOrigin: null, behindOfOrigin: null } },
     async checkoutDiff() { return [] },
+    async commitCheckout() { return { success: true } },
+    async pushCheckout() { return { success: true } },
+    async pullCheckout() { return { success: true } },
     async createWorkspace(input) { created.push(input); return workspace() },
     async archiveWorkspace() {},
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
@@ -422,4 +425,46 @@ test('a diff subscription opens with a subscription id and stops on unsubscribe'
   client.request({ type: 'unsubscribe_checkout_diff_request', subscriptionId: 'sub_1' })
   await client.settle()
   assert.equal(client.last().type, 'subscribe_checkout_diff_response')
+})
+
+test('a checkout commit answers with its own response frame', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'workspace.create.request', requestId: 'r0', source: { kind: 'directory', path: '/repo' } })
+  await client.settle()
+  client.request({ type: 'checkout_commit_request', requestId: 'r1', cwd: '/repo', message: 'fix', addAll: true })
+  await client.settle()
+  const payload = client.last().payload as Record<string, unknown>
+  assert.equal(client.last().type, 'checkout_commit_response')
+  assert.equal(payload.success, true)
+  assert.equal(payload.error, null)
+  assert.equal(payload.cwd, '/repo')
+})
+
+test('push, pull, and refresh answer with their own frames', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'workspace.create.request', requestId: 'r0', source: { kind: 'directory', path: '/repo' } })
+  await client.settle()
+  for (const [type, expected] of [
+    ['checkout_push_request', 'checkout_push_response'],
+    ['checkout_pull_request', 'checkout_pull_response'],
+    ['checkout.refresh.request', 'checkout.refresh.response'],
+  ] as const) {
+    client.request({ type, requestId: 'r1', cwd: '/repo' })
+    await client.settle()
+    assert.equal(client.last().type, expected)
+    assert.equal((client.last().payload as Record<string, unknown>).success, true)
+  }
+})
+
+test('a checkout write for an unadvertised directory is refused', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'checkout_commit_request', requestId: 'r1', cwd: '/etc' })
+  await client.settle()
+  assert.equal(client.last().type, 'rpc_error')
 })

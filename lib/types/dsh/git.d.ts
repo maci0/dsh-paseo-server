@@ -70,3 +70,42 @@ export declare function readDiff(directory: string, compare: DiffCompare): Promi
  * @returns one entry per changed file.
  */
 export declare function parseUnifiedDiff(diff: string): DiffFile[];
+/** Failure codes the client understands. */
+export type GitErrorCode = 'NOT_GIT_REPO' | 'NOT_ALLOWED' | 'MERGE_CONFLICT' | 'UNKNOWN';
+/** Outcome of one write to the working tree. */
+export interface GitOperationResult {
+    readonly success: boolean;
+    readonly error?: {
+        readonly code: GitErrorCode;
+        readonly message: string;
+    };
+}
+/**
+ * Commit the working tree.
+ *
+ * `addAll` stages tracked and untracked changes first, which is what the
+ * client's "commit all" means. A missing message gets one derived from the
+ * changed files rather than an empty commit message git would open an editor
+ * for; the daemon never runs an interactive editor.
+ * @param directory - repository directory.
+ * @param message - client-supplied commit message.
+ * @param addAll - whether to stage everything first.
+ * @returns the outcome.
+ */
+export declare function commitCheckout(directory: string, message: string | undefined, addAll: boolean): Promise<GitOperationResult>;
+/**
+ * Push the current branch, setting its upstream on the first push.
+ * @param directory - repository directory.
+ * @returns the outcome. Force pushing is never attempted.
+ */
+export declare function pushCheckout(directory: string): Promise<GitOperationResult>;
+/**
+ * Fast-forward the current branch from its upstream.
+ *
+ * `--ff-only` is deliberate: a pull that would need a merge stops and reports
+ * the conflict instead of creating a merge commit the operator never asked
+ * for.
+ * @param directory - repository directory.
+ * @returns the outcome.
+ */
+export declare function pullCheckout(directory: string): Promise<GitOperationResult>;
