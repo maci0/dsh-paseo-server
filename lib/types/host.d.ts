@@ -78,6 +78,30 @@ export interface SessionsLike {
     get(id: string): SessionLike | undefined;
     list(): readonly SessionLike[];
 }
+/** One background job, as the job registry projects it. */
+export interface JobViewLike {
+    readonly id: string;
+    readonly status: 'running' | 'stopping' | 'completed' | 'killed' | 'failed';
+    /** Terminal reason, such as `exit code: 3`. */
+    readonly detail?: string;
+}
+/** Background job registry surface a workspace script runs on. */
+export interface JobsLike {
+    start(spec: {
+        readonly kind: string;
+        readonly label: string;
+        readonly run: (job: {
+            append(text: string): void;
+        }) => {
+            cancel(reason?: string): void;
+            done: Promise<unknown>;
+        };
+    }): string;
+    get(id: string): JobViewLike;
+    kill(id: string, caller?: string, reason?: string): 'requested' | 'already-finished';
+    /** Claim that this composition runs the jobs it starts. */
+    attachController(name: string): () => void;
+}
 /** Live agent surface. */
 export interface AgentsLike {
     get(id: string): unknown;

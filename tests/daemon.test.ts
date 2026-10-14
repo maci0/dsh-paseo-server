@@ -81,6 +81,9 @@ function fakeBridge() {
     async resizeTerminal() {},
     async renameTerminal() {},
     async closeTerminal() {},
+    async listWorkspaceScripts() { return [] },
+    async startWorkspaceScript() { throw new Error('unused') },
+    async stopWorkspaceScript() { throw new Error('unused') },
     async createWorkspace(input) { created.push(input); return workspace() },
     async archiveWorkspace() {},
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
@@ -530,3 +533,36 @@ test('a terminal that cannot be attached answers with the reason', async () => {
   assert.equal(payload.error, null)
 })
 
+
+test('delete_agent_request archives and answers with agent_deleted', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'delete_agent_request', requestId: 'r1', agentId: 'ses_1' })
+  await client.settle()
+  assert.equal(client.last().type, 'agent_deleted')
+  assert.equal((client.last().payload as Record<string, unknown>).agentId, 'ses_1')
+})
+
+test('workspace.script.list.request reports the declared scripts', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'workspace.script.list.request', requestId: 'r1', workspaceId: 'ws_1' })
+  await client.settle()
+  // The reply is followed by the change broadcast, so read it by type rather
+  // than as the last frame.
+  const payload = client.payloads('workspace.script.list.response')[0] as Record<string, unknown>
+  assert.equal(payload.workspaceId, 'ws_1')
+  assert.deepEqual(payload.scripts, [])
+  assert.equal(payload.error, null)
+})
+
+test('a workspace script request without a workspace is refused', async () => {
+  const { bridge } = fakeBridge()
+  const client = connect(makeDaemon(bridge))
+  client.hello()
+  client.request({ type: 'workspace.script.start.request', requestId: 'r1', scriptName: 'dev' })
+  await client.settle()
+  assert.equal(client.last().type, 'rpc_error')
+})

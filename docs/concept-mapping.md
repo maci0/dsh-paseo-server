@@ -78,17 +78,30 @@ answered with a full snapshot, which keeps the two sequence spaces aligned.
 
 ## Still to build
 
-Workspace scripts, schedules and heartbeats, agent deletion, and the
-forge half of the git surface (pull requests, checks, forge search) is not
-bridged yet. Each has a DSH counterpart to map onto, so none is deferred on
-principle; this table tracks what is left.
+Schedules and heartbeats and the forge half of the git surface (pull requests,
+checks, forge search) are not bridged yet. Each has a DSH counterpart to map
+onto, so none is deferred on principle; this table tracks what is left.
 
 | Paseo feature | Target |
 | --- | --- |
-| Workspace scripts | The DSH job registry. |
 | Schedules and heartbeats | The DSH schedule plugin's own store. |
-| Agent delete | Session removal, once the persistence service exposes it. |
 | Forge panels and pull requests | A forge client, which the harness does not ship. |
+
+## Workspace scripts and deletion
+
+Paseo declares a workspace's scripts in `paseo.json` at the workspace root, so
+this daemon reads the same file rather than inventing a second format. A
+declared script runs as a DSH background job: start, stop, output, and exit
+state come from the job registry, and the plugin claims a job controller at
+mount because the registry only serves a composition that does.
+
+The registry's output surface is the job ring, not a port, so a script reports
+its declared port but no proxy URL, and health stays null because nothing here
+probes it.
+
+`delete_agent_request` answers with `agent_deleted` and archives the session.
+DSH has no session delete, and the visible outcome is the same, so a delete
+from the phone is reversible on the host instead of destroying history.
 
 ## Terminals
 
@@ -137,7 +150,6 @@ re-reads status and diff.
 | Item | Note |
 | --- | --- |
 | Subagent projection | DSH child sessions carry `origin: 'subagent'`. Paseo has a provider-subagent surface, which is the natural target. |
-| Delete | Paseo hard-deletes an agent. DSH archives a session instead, which is the same visible outcome and stays reversible. |
 
 ## Protocol provenance
 

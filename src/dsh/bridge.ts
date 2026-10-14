@@ -10,9 +10,12 @@
  * @module dsh-paseo-server/dsh/bridge
  */
 
+import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { commitCheckout, pullCheckout, pushCheckout, readDiff, readGitStatus } from './git.ts'
 import type { DiffCompare, DiffFile, GitOperationResult, GitStatus } from './git.ts'
+import { readWorkspaceScripts } from './scripts.ts'
+import type { WorkspaceScriptDefinition } from './scripts.ts'
 import type {
   AgentRecord,
   AgentStatus,
@@ -25,6 +28,7 @@ import type {
   TerminalRecord,
   TimelineItem,
   WorkspaceRecord,
+  WorkspaceScriptRecord,
   WorkspaceStatus,
 } from '../bridge.ts'
 import type {
@@ -39,6 +43,8 @@ import type {
   SessionsLike,
   TerminalControllerLike,
   TerminalFrameLike,
+  JobViewLike,
+  JobsLike,
   TerminalInfoLike,
   WorkspaceLike,
   WorkspaceRegistryLike,
@@ -84,6 +90,9 @@ class DshBridge implements PaseoBridge {
   private readonly failed = new Set<string>()
   /** Client-minted prompt identities awaiting their user/message event, oldest first. */
   /** Owning session and writable attachment of every terminal this daemon saw. */
+  /** Running script jobs, keyed by workspace and script name. */
+  private readonly scriptJobs = new Map<string, string>()
+
   private readonly terminalOwners = new Map<string, { sessionId: string; attachmentId?: string }>()
 
   private readonly pendingClientMessageIds: Array<{ agentId: string; clientMessageId: string }> = []
@@ -404,6 +413,97 @@ class DshBridge implements PaseoBridge {
     const { agent } = this.requireTerminalOwner(terminalId)
     await this.requireTerminalController().close(agent, terminalId)
     this.terminalOwners.delete(terminalId)
+  }
+
+  /** Declared scripts of one workspace, each with its current lifecycle. */
+  async listWorkspaceScripts(workspaceId: string): Promise<readonly WorkspaceScriptRecord[]> {
+    const workspace = await this.workspaceFor(workspaceId)
+    if (workspace === undefined) throw new Error(`unknown workspace ${workspaceId}`)
+    const definitions = await readWorkspaceScripts(workspace.directory)
+    return definitions.map((definition) => this.scriptRecord(workspaceId, definition))
+  }
+
+  /** Start one declared script as a background job. */
+  async startWorkspaceScript(workspaceId: string, name: string): Promise<WorkspaceScriptRecord> {
+    const workspace = await this.workspaceFor(workspaceId)
+    if (workspace === undefined) throw new Error(`unknown workspace ${workspaceId}`)
+    const definition = (await readWorkspaceScripts(workspace.directory)).find((entry) => entry.name === name)
+    if (definition === undefined) throw new Error(`workspace declares no script named ${name}`)
+    const key = scriptKey(workspaceId, name)
+    if (this.scriptJobs.get(key) !== undefined) return this.scriptRecord(workspaceId, definition)
+
+    const jobs = this.requireJobs()
+    const jobId = jobs.start({
+      kind: 'paseo-script',
+      label: `${name}: ${definition.command}`,
+      run: (job) => {
+        // The command is the workspace's own declaration, run through a shell
+        // for the same reason Paseo runs it that way: a declared script is a
+        // command line, not an argv array. The spawn sits inside the starter so
+        // a refused registration cannot leave an orphan process behind.
+        const child = spawn(definition.command, { cwd: workspace.directory, shell: true, env: process.env })
+        return {
+          cancel: () => { child.kill('SIGTERM') },
+          done: new Promise((resolve) => {
+            const forward = (chunk: Buffer): void => { job.append(chunk.toString('utf8')) }
+            child.stdout?.on('data', forward)
+            child.stderr?.on('data', forward)
+            child.on('error', (error: Error) => { resolve({ ok: false, detail: error.message }) })
+            child.on('close', (code: number | null, signal: string | null) => {
+              resolve({ ok: code === 0, detail: signal === null ? `exit code: ${String(code)}` : `signal: ${signal}` })
+            })
+          }),
+        }
+      },
+    })
+    this.scriptJobs.set(key, jobId)
+    return this.scriptRecord(workspaceId, definition)
+  }
+
+  /** Stop one running script. */
+  async stopWorkspaceScript(workspaceId: string, name: string): Promise<WorkspaceScriptRecord> {
+    const workspace = await this.workspaceFor(workspaceId)
+    if (workspace === undefined) throw new Error(`unknown workspace ${workspaceId}`)
+    const key = scriptKey(workspaceId, name)
+    const jobId = this.scriptJobs.get(key)
+    if (jobId !== undefined) {
+      this.requireJobs().kill(jobId, undefined, 'stopped from Paseo')
+      this.scriptJobs.delete(key)
+    }
+    const definition = (await readWorkspaceScripts(workspace.directory)).find((entry) => entry.name === name)
+    if (definition === undefined) throw new Error(`workspace declares no script named ${name}`)
+    return this.scriptRecord(workspaceId, definition)
+  }
+
+  /** Project one declaration plus its job, when it has one. */
+  private scriptRecord(workspaceId: string, definition: WorkspaceScriptDefinition): WorkspaceScriptRecord {
+    const jobId = this.scriptJobs.get(scriptKey(workspaceId, definition.name))
+    const job = jobId === undefined ? undefined : this.jobsView(jobId)
+    return {
+      name: definition.name,
+      type: definition.type,
+      command: definition.command,
+      port: definition.port,
+      lifecycle: job?.status === 'running' || job?.status === 'stopping' ? 'running' : 'stopped',
+      health: null,
+      exitCode: job === undefined ? null : exitCodeOf(job.detail),
+    }
+  }
+
+  private jobsView(jobId: string): JobViewLike | undefined {
+    const jobs = this.ctx.get('jobs') as JobsLike | undefined
+    if (jobs === undefined) return undefined
+    try {
+      return jobs.get(jobId)
+    } catch {
+      return undefined
+    }
+  }
+
+  private requireJobs(): JobsLike {
+    const jobs = this.ctx.get('jobs') as JobsLike | undefined
+    if (jobs === undefined) throw new Error('the jobs service is not mounted')
+    return jobs
   }
 
   private requireTerminalController(): TerminalControllerLike {
@@ -861,4 +961,15 @@ function basenameOf(path: string): string {
 
 function digest(input: string): string {
   return createHash('sha256').update(input).digest('hex').slice(0, 16)
+}
+
+/** Key one running script by workspace and name. */
+function scriptKey(workspaceId: string, name: string): string {
+  return `${workspaceId}\u0000${name}`
+}
+
+/** Exit code git-style detail carries, when it names one. */
+function exitCodeOf(detail: string | undefined): number | null {
+  const match = detail?.match(/exit code: (\d+)/)
+  return match === null || match === undefined ? null : Number(match[1])
 }

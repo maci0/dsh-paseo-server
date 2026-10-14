@@ -18,6 +18,7 @@ import type { WireSocket } from './transport.ts'
 import {
   agentRemoved,
   agentCreateFailedStatus,
+  agentDeleted,
   agentCreateResponse,
   agentCreatedStatus,
   agentResponse,
@@ -41,7 +42,9 @@ import {
   terminalSubscribeFailed,
   terminalSubscribed,
   terminalsChanged,
+  scriptStatusUpdate,
   terminalsResponse,
+  workspaceScriptResponse,
   parseInbound,
   pong,
   providerModelsResponse,
@@ -493,6 +496,57 @@ export class PaseoDaemon {
             return
           }
           reply(await this.runCheckoutOperation(type, requestId, known, message))
+          return
+        }
+        case 'delete_agent_request': {
+          const agentId = stringField(message, 'agentId')
+          if (agentId === undefined) {
+            reply(rpcError(requestId, type, 'agentId is required', 'invalid_request'))
+            return
+          }
+          // DSH has no session delete, so delete and archive land in the same
+          // place: the agent leaves every list and stops running.
+          try {
+            await this.options.bridge.archiveAgent(agentId)
+          } catch (error) {
+            this.options.logger.warn(`paseo: deleting agent ${agentId} failed: ${String(error)}`)
+          }
+          reply(agentDeleted(agentId))
+          return
+        }
+        case 'workspace.script.list.request':
+        case 'workspace.script.start.request':
+        case 'workspace.script.stop.request': {
+          const workspaceId = stringField(message, 'workspaceId')
+          if (workspaceId === undefined) {
+            reply(rpcError(requestId, type, 'workspaceId is required', 'invalid_request'))
+            return
+          }
+          const responseType = type.replace('.request', '.response') as
+            | 'workspace.script.list.response'
+            | 'workspace.script.start.response'
+            | 'workspace.script.stop.response'
+          const scriptName = stringField(message, 'scriptName')
+          try {
+            if (type === 'workspace.script.start.request' && scriptName !== undefined) {
+              await this.options.bridge.startWorkspaceScript(workspaceId, scriptName)
+            }
+            if (type === 'workspace.script.stop.request' && scriptName !== undefined) {
+              await this.options.bridge.stopWorkspaceScript(workspaceId, scriptName)
+            }
+            const scripts = await this.options.bridge.listWorkspaceScripts(workspaceId)
+            reply(workspaceScriptResponse(responseType, requestId, workspaceId, scripts, null, scriptName))
+            this.broadcast(scriptStatusUpdate(workspaceId, scripts))
+          } catch (error) {
+            reply(workspaceScriptResponse(
+              responseType,
+              requestId,
+              workspaceId,
+              [],
+              error instanceof Error ? error.message : String(error),
+              scriptName,
+            ))
+          }
           return
         }
         case 'daemon.get_status.request': {

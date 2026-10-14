@@ -10,7 +10,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createDshBridge, promptParts } from '../src/dsh/bridge.ts'
 import { parseUnifiedDiff } from '../src/dsh/git.ts'
+import { readWorkspaceScripts } from '../src/dsh/scripts.ts'
 import type { HostContext, SessionEventLike } from '../src/host.ts'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { scratchDir } from './scratch.ts'
 
 /** Context whose services the test drives directly. */
 function fakeContext(services: Record<string, unknown>) {
@@ -209,4 +213,24 @@ test('a binary file is reported as binary, not as empty text', () => {
 
 test('an empty diff parses to no files', () => {
   assert.deepEqual(parseUnifiedDiff(''), [])
+})
+
+test('workspace scripts come from paseo.json', async () => {
+  const directory = scratchDir('scripts')
+  await writeFile(join(directory, 'paseo.json'), JSON.stringify({
+    scripts: {
+      dev: { type: 'service', command: 'bun run dev', port: 3000 },
+      lint: { command: 'bun run lint' },
+      broken: { command: '   ' },
+    },
+  }))
+  const scripts = await readWorkspaceScripts(directory)
+  assert.deepEqual(scripts, [
+    { name: 'dev', type: 'service', command: 'bun run dev', port: 3000 },
+    { name: 'lint', type: 'service', command: 'bun run lint', port: null },
+  ])
+})
+
+test('a workspace without paseo.json declares no scripts', async () => {
+  assert.deepEqual(await readWorkspaceScripts(scratchDir('scripts-empty')), [])
 })

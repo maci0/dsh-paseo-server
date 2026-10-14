@@ -8,7 +8,7 @@
  * @module dsh-paseo-server/paseo/wire
  */
 import type { DiffFile, GitStatus } from '../dsh/git.ts';
-import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts';
+import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord, WorkspaceScriptRecord } from '../bridge.ts';
 /** Protocol version the 0.11.2 client sends and expects. */
 export declare const PASEO_PROTOCOL_VERSION = 1;
 /** Paseo daemon version this server reports. */
@@ -179,3 +179,11 @@ export declare function eventsSubscriptionSet(requestId: string): Record<string,
 export declare function attentionCleared(requestId: string): Record<string, unknown>;
 /** Statuses whose agents the client shows as needing attention. */
 export declare const ATTENTION_STATUSES: readonly AgentStatus[];
+/** One workspace script in the client's shape. */
+export declare function workspaceScript(record: WorkspaceScriptRecord): Record<string, unknown>;
+/** One `workspace.script.*` response, which all three requests share. */
+export declare function workspaceScriptResponse(type: 'workspace.script.list.response' | 'workspace.script.start.response' | 'workspace.script.stop.response', requestId: string, workspaceId: string, scripts: readonly WorkspaceScriptRecord[], error?: string | null, scriptName?: string): Record<string, unknown>;
+/** `script_status_update`, which tells clients to re-list a workspace's scripts. */
+export declare function scriptStatusUpdate(workspaceId: string, scripts: readonly WorkspaceScriptRecord[]): Record<string, unknown>;
+/** `agent_deleted`, the answer to a delete request this daemon archives instead. */
+export declare function agentDeleted(agentId: string): Record<string, unknown>;

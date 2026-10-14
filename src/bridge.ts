@@ -87,6 +87,18 @@ export interface TimelineEntry {
   readonly turnId?: string
 }
 
+/** One declared workspace script and what it is doing now. */
+export interface WorkspaceScriptRecord {
+  readonly name: string
+  readonly type: 'script' | 'service'
+  readonly command: string
+  readonly port: number | null
+  readonly lifecycle: 'running' | 'stopped'
+  /** Health is only known for a script the daemon can probe; null means unprobed. */
+  readonly health: 'healthy' | 'unhealthy' | null
+  readonly exitCode: number | null
+}
+
 /** One terminal a Paseo client can attach to. */
 export interface TerminalRecord {
   readonly id: string
@@ -202,6 +214,12 @@ export interface PaseoBridge {
   renameTerminal(terminalId: string, title: string): Promise<void>
   /** Close one terminal and kill its process. */
   closeTerminal(terminalId: string): Promise<void>
+  /** Scripts one workspace declares, with their current lifecycle. */
+  listWorkspaceScripts(workspaceId: string): Promise<readonly WorkspaceScriptRecord[]>
+  /** Start one declared script as a background job. */
+  startWorkspaceScript(workspaceId: string, name: string): Promise<WorkspaceScriptRecord>
+  /** Stop one running script. */
+  stopWorkspaceScript(workspaceId: string, name: string): Promise<WorkspaceScriptRecord>
   /** Archive a workspace and its agents. */
   archiveWorkspace(workspaceId: string): Promise<void>
   /** Subscribe to live agent, workspace, and timeline events. */

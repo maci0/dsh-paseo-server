@@ -24,7 +24,7 @@ import { DEFAULT_RELAY_ENDPOINT, startRelayTransport } from './paseo/relay.ts'
 import type { RelayTransport } from './paseo/relay.ts'
 import { upgradeWebSocket } from './paseo/websocket.ts'
 import { DEFAULT_ALLOWED_ORIGINS, originAllowed, rejectUpgrade } from './paseo/origin.ts'
-import type { HostContext, WebServerLike } from './host.ts'
+import type { HostContext, JobsLike, WebServerLike } from './host.ts'
 import type { Volatile } from '@deepseek-ai/cordis'
 
 /** Plugin name as it appears in the loader. */
@@ -199,6 +199,13 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
     defaultModel: live().defaultModel,
   })
   bridge.bindIdentity(identity.serverId, VERSION)
+
+  // Workspace scripts run as background jobs. The registry only serves a
+  // composition that claims a controller, so the plugin claims one at mount.
+  const jobs = ctx.get('jobs') as JobsLike | undefined
+  if (jobs !== undefined) {
+    ctx.effect(() => jobs.attachController('paseo-workspace-scripts'), 'paseo-server.script-controller')
+  }
 
   const webServer = ctx.get('webServer') as WebServerLike | undefined
   const daemon = new PaseoDaemon({

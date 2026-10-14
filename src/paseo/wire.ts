@@ -9,7 +9,15 @@
  */
 
 import type { DiffFile, GitStatus } from '../dsh/git.ts'
-import type { AgentRecord, AgentStatus, TerminalRecord, TimelineEntry, TimelineItem, WorkspaceRecord } from '../bridge.ts'
+import type {
+  AgentRecord,
+  AgentStatus,
+  TerminalRecord,
+  TimelineEntry,
+  TimelineItem,
+  WorkspaceRecord,
+  WorkspaceScriptRecord,
+} from '../bridge.ts'
 
 /** Protocol version the 0.11.2 client sends and expects. */
 export const PASEO_PROTOCOL_VERSION = 1
@@ -60,6 +68,10 @@ export const SUPPORTED_REQUESTS: readonly string[] = [
   'kill_terminal_request',
   'terminal.rename.request',
   'terminal_input',
+  'delete_agent_request',
+  'workspace.script.list.request',
+  'workspace.script.start.request',
+  'workspace.script.stop.request',
   'checkout_status_request',
   'checkout_commit_request',
   'checkout_push_request',
@@ -795,3 +807,52 @@ export function attentionCleared(requestId: string): Record<string, unknown> {
 
 /** Statuses whose agents the client shows as needing attention. */
 export const ATTENTION_STATUSES: readonly AgentStatus[] = ['idle', 'error']
+
+/** One workspace script in the client's shape. */
+export function workspaceScript(record: WorkspaceScriptRecord): Record<string, unknown> {
+  return {
+    scriptName: record.name,
+    type: record.type,
+    // A script runs inside this machine's shell; the daemon itself is the host.
+    hostname: 'localhost',
+    port: record.port,
+    localProxyUrl: null,
+    publicProxyUrl: null,
+    proxyUrl: null,
+    lifecycle: record.lifecycle,
+    health: record.health,
+    exitCode: record.exitCode,
+    terminalId: null,
+  }
+}
+
+/** One `workspace.script.*` response, which all three requests share. */
+export function workspaceScriptResponse(
+  type: 'workspace.script.list.response' | 'workspace.script.start.response' | 'workspace.script.stop.response',
+  requestId: string,
+  workspaceId: string,
+  scripts: readonly WorkspaceScriptRecord[],
+  error: string | null = null,
+  scriptName?: string,
+): Record<string, unknown> {
+  return {
+    type,
+    payload: {
+      requestId,
+      workspaceId,
+      ...(scriptName === undefined ? {} : { scriptName }),
+      scripts: scripts.map(workspaceScript),
+      error,
+    },
+  }
+}
+
+/** `script_status_update`, which tells clients to re-list a workspace's scripts. */
+export function scriptStatusUpdate(workspaceId: string, scripts: readonly WorkspaceScriptRecord[]): Record<string, unknown> {
+  return { type: 'script_status_update', payload: { workspaceId, scripts: scripts.map(workspaceScript) } }
+}
+
+/** `agent_deleted`, the answer to a delete request this daemon archives instead. */
+export function agentDeleted(agentId: string): Record<string, unknown> {
+  return { type: 'agent_deleted', payload: { agentId } }
+}
