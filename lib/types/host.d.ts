@@ -37,6 +37,10 @@ export interface SessionSummaryLike {
     readonly parentSessionId?: string;
     readonly origin?: 'subagent';
     readonly updatedAt: number;
+    /** Partial projection hints a cold listing can carry, including the title. */
+    readonly projections?: {
+        readonly values?: Readonly<Record<string, unknown>>;
+    };
 }
 /** Durable session surface used for timeline reconstruction. */
 export interface SessionLike {
@@ -114,6 +118,22 @@ export interface SessionControllerLike {
         readonly sessionId: string;
     }): Promise<{
         readonly accepted: boolean;
+    }>;
+    /** One message-aligned page of a Session log, readable while the Session is cold. */
+    page?(request: {
+        readonly address: {
+            readonly kind: 'session';
+            readonly sessionId: string;
+        };
+        /** `-1` reads the newest page. */
+        readonly throughSeq: number;
+        readonly beforeSeq?: number;
+        readonly maxMessages?: number;
+    }, signal: AbortSignal): Promise<{
+        readonly records: readonly {
+            readonly event: SessionEventLike;
+        }[];
+        readonly hasMore: boolean;
     }>;
     /** Install a model selection on a session, when the composition supports it. */
     selectModel?(request: {

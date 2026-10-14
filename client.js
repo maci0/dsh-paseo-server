@@ -197,7 +197,9 @@ window.__ModuleLoader__.load({
       const Card = createCard(t)
       ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
         name: 'plugins.row.config',
-        key: '@maci0/dsh-paseo-server#paseo',
+        // `${package}#${rowId}` is the identity the Plugins page looks up for a
+        // row's card; any other key registers a card nothing ever renders.
+        key: '@maci0/dsh-paseo-server#paseo-server',
         locale: LOCALE_NS,
       }, Card))
     }
