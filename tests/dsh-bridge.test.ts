@@ -275,3 +275,31 @@ function gitRun(directory: string, args: readonly string[]): void {
   const result = spawnSync('git', ['-C', directory, ...args], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
 }
+
+test('a session with no directory is an agent under an ungrouped workspace', async () => {
+  const { services } = coldHost()
+  // A session the operator never gave a directory to: the DSH sidebar groups
+  // it as Ungrouped, so the workspace list has to carry that group too.
+  ;(services.sessionController as { list: () => Promise<unknown> }).list = async () => ({
+    items: [
+      {
+        sessionId: 'session-loose',
+        running: false,
+        agentAvailable: false,
+        blank: false,
+        updatedAt: 1_760_000_002_000,
+        projections: { kind: 'cached', asOfSeq: 1, values: { title: 'Loose chat' } },
+      },
+    ],
+  })
+  const bridge = createDshBridge({ ctx: fakeContext(services).ctx, defaultProvider: 'deepseek', defaultModel: 'deepseek-flash' })
+
+  const agents = await bridge.listAgents()
+  assert.equal(agents.length, 1)
+  assert.equal(agents[0]?.cwd, '')
+
+  const workspaces = await bridge.listWorkspaces()
+  const owner = workspaces.find((workspace) => workspace.id === agents[0]?.workspaceId)
+  assert.ok(owner !== undefined, 'the agent workspace must appear in the workspace list')
+  assert.equal(owner.name, 'Ungrouped')
+})

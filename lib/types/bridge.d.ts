@@ -237,6 +237,8 @@ export interface PaseoBridge {
             readonly mimeType: string;
         }[];
     }): Promise<AgentRecord>;
+    /** Agents the last listing produced, for the diagnostics report. */
+    readonly lastAgentCount?: number;
     /** Checkout state of one workspace directory, for the client's git surface. */
     checkoutStatus(directory: string): Promise<GitStatus>;
     /** Parsed diff of one workspace directory against the requested comparison. */

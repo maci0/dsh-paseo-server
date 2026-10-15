@@ -1903,6 +1903,10 @@ export class PaseoDaemon {
    */
   requestReport(): Record<string, unknown> {
     return {
+      // Counts a client renders from, so an empty list can be told apart from
+      // a list this daemon never built.
+      agents: this.options.bridge.lastAgentCount ?? null,
+      workspaces: this.workspaceCache.size,
       serverId: this.options.bridge.serverId,
       version: this.options.bridge.version,
       connectedClients: this.connections.size,

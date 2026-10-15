@@ -188,6 +188,9 @@ class DshBridge implements PaseoBridge {
   /** Client-minted prompt identities awaiting their user/message event, oldest first. */
   /** Owning session and writable attachment of every terminal this daemon saw. */
   /** Running script jobs, keyed by workspace and script name. */
+  /** Agents the last listing produced, for the diagnostics report. */
+  lastAgentCount: number | undefined
+
   /** Label catalog, read lazily from its own store. */
   private labelCache: LabelState | null = null
 
@@ -274,7 +277,13 @@ class DshBridge implements PaseoBridge {
     }
     for (const summary of await this.summaries()) {
       const cwd = summary.cwd
-      if (cwd === undefined) continue
+      if (cwd === undefined) {
+        // A session the operator never gave a directory to is the DSH
+        // sidebar's Ungrouped bucket, which a client needs as a workspace or
+        // its conversations have nowhere to appear.
+        records.set(UNGROUPED_WORKSPACE_ID, this.ungroupedWorkspace())
+        continue
+      }
       const record = this.workspaceForCwd(cwd)
       records.set(record.id, record)
     }
@@ -293,6 +302,7 @@ class DshBridge implements PaseoBridge {
       if (archived.has(summary.sessionId)) continue
       agents.push(this.agentRecord(summary, byCwd.get(summary.cwd ?? '')))
     }
+    this.lastAgentCount = agents.length
     return agents
   }
 
@@ -1496,7 +1506,7 @@ class DshBridge implements PaseoBridge {
     return {
       id: info.id,
       sessionId,
-      workspaceId: this.workspaceForCwd(directory).id,
+      workspaceId: directory.length === 0 ? UNGROUPED_WORKSPACE_ID : this.workspaceForCwd(directory).id,
       title: info.title,
       cwd: directory,
       cols: info.cols,
@@ -1641,7 +1651,8 @@ class DshBridge implements PaseoBridge {
       status,
       ...(summary.parentSessionId === undefined ? {} : { parentAgentId: summary.parentSessionId }),
       cwd: directory,
-      workspaceId: workspace?.id ?? this.workspaceForCwd(directory).id,
+      workspaceId: workspace?.id
+        ?? (directory.length === 0 ? UNGROUPED_WORKSPACE_ID : this.workspaceForCwd(directory).id),
       createdAt: updatedAt,
       updatedAt,
       lastUserMessageAt: updatedAt,
@@ -1681,6 +1692,32 @@ class DshBridge implements PaseoBridge {
       [],
     )
     this.workspaceCache.set(id, record)
+    return record
+  }
+
+  /** The workspace that holds sessions with no directory of their own. */
+  private ungroupedWorkspace(): WorkspaceRecord {
+    const cached = this.workspaceCache.get(UNGROUPED_WORKSPACE_ID)
+    if (cached !== undefined) return cached
+    const now = new Date(0).toISOString()
+    const record: WorkspaceRecord = {
+      id: UNGROUPED_WORKSPACE_ID,
+      projectId: 'prj_ungrouped',
+      projectKey: '',
+      projectName: 'Ungrouped',
+      projectRootPath: '',
+      projectKind: 'directory',
+      name: 'Ungrouped',
+      labels: this.labelsFor(UNGROUPED_WORKSPACE_ID),
+      directory: '',
+      status: 'done',
+      statusEnteredAt: now,
+      activityAt: now,
+      createdAt: now,
+      updatedAt: now,
+      checkout: { repoRoot: '', isGit: false },
+    }
+    this.workspaceCache.set(UNGROUPED_WORKSPACE_ID, record)
     return record
   }
 
@@ -1923,6 +1960,9 @@ function basenameOf(path: string): string {
 function digest(input: string): string {
   return createHash('sha256').update(input).digest('hex').slice(0, 16)
 }
+
+/** Identity of the workspace that holds sessions with no directory. */
+const UNGROUPED_WORKSPACE_ID = 'ws_ungrouped'
 
 /** Key one running script by workspace and name. */
 function scriptKey(workspaceId: string, name: string): string {

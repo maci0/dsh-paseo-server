@@ -13,7 +13,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.16.1
+dsh plugin --profile web add @maci0/dsh-paseo-server@0.16.2
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -75,11 +75,18 @@ is a timeline row.
   for defence in depth.
 - The identity files are written owner-only (`0600`).
 
+## Ungrouped conversations
+
+A Session the operator never gave a directory to is the DSH sidebar's Ungrouped
+bucket. It lists as an agent like any other, and the bucket itself is reported
+as a workspace named `Ungrouped`, because a Paseo client groups conversations
+by workspace and would otherwise have nowhere to show them.
+
 ## Diagnosing an empty client
 
-`/paseo/diagnostics` reports what clients asked: a count per request type, the
-ones this daemon could not answer, and the newest 300 requests with their
-timestamps. An empty conversation list is either a client that never reached
+`/paseo/diagnostics` reports what clients asked: how many agents and
+workspaces the last listing produced, a count per request type, the ones this
+daemon could not answer, and the newest 300 requests with their timestamps. An empty conversation list is either a client that never reached
 this daemon or a request it could not answer, and that endpoint tells the two
 apart.
 
