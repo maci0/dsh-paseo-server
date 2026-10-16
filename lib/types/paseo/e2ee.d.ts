@@ -20,6 +20,8 @@ export interface ChannelSocket {
 export interface ChannelEvents {
     /** One decrypted application frame. */
     message(text: string): void;
+    /** One decrypted terminal or file-transfer frame. */
+    binary?(bytes: Uint8Array): void;
     /** The peer closed, or the handshake failed. */
     close(): void;
 }

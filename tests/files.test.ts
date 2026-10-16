@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   createEntry,
@@ -26,16 +26,81 @@ import {
 } from '../src/dsh/files.ts'
 import { scratchDir } from './scratch.ts'
 
-test('a relative path resolves inside its workspace', () => {
-  assert.equal(resolveInside('/repo', 'src/index.ts'), '/repo/src/index.ts')
-  assert.equal(resolveInside('/repo', ''), '/repo')
-  assert.equal(resolveInside('/repo', undefined), '/repo')
+test('a relative path resolves inside its workspace', async () => {
+  const root = scratchDir('resolve')
+  assert.equal(await resolveInside(root, 'src/index.ts'), join(root, 'src/index.ts'))
+  assert.equal(await resolveInside(root, ''), root)
+  assert.equal(await resolveInside(root, undefined), root)
+  assert.equal(await resolveInside(root, '..notes'), join(root, '..notes'))
 })
 
-test('a path that escapes the workspace is refused', () => {
-  assert.equal(resolveInside('/repo', '../secrets'), null)
-  assert.equal(resolveInside('/repo', 'src/../../etc/passwd'), null)
-  assert.equal(resolveInside('/repo', '/etc/passwd'), null)
+test('a path that escapes the workspace is refused', async () => {
+  assert.equal(await resolveInside('/repo', '../secrets'), null)
+  assert.equal(await resolveInside('/repo', 'src/../../etc/passwd'), null)
+  assert.equal(await resolveInside('/repo', '/etc/passwd'), null)
+})
+
+test('workspace operations refuse paths through an outside or dangling symlink', async () => {
+  const parent = scratchDir('symlink')
+  const root = join(parent, 'workspace')
+  const outside = join(parent, 'outside')
+  await mkdir(root)
+  await mkdir(outside)
+  await writeFile(join(outside, 'note.txt'), 'keep')
+  await symlink(outside, join(root, 'link'))
+  await symlink(join(outside, 'missing.txt'), join(root, 'dangling'))
+  const modifiedAt = (await stat(join(outside, 'note.txt'))).mtime.toISOString()
+  assert.equal(await readWorkspaceFile(root, 'link/note.txt'), null)
+  assert.equal((await writeWorkspaceFile(root, 'link/note.txt', 'lost', modifiedAt)).status, 'error')
+  assert.ok('error' in await deleteEntry(root, 'link/note.txt'))
+  assert.ok('error' in await createEntry(root, 'link', 'new.txt', 'file'))
+  assert.equal(await resolveInside(root, 'dangling'), null)
+  assert.equal(await readFile(join(outside, 'note.txt'), 'utf8'), 'keep')
+})
+
+test('listing and deleting an outside symlink inspect only the workspace entry', async () => {
+  const parent = scratchDir('symlink-entry')
+  const root = join(parent, 'workspace')
+  const outside = join(parent, 'outside.txt')
+  await mkdir(root)
+  await writeFile(outside, 'keep this outside content')
+  const link = join(root, 'link')
+  await symlink(outside, link)
+  const info = await lstat(link)
+  assert.deepEqual(await listDirectory(root), [{ name: 'link', path: 'link', kind: 'file', size: info.size, modifiedAt: info.mtime.toISOString() }])
+  assert.equal(await readWorkspaceFile(root, 'link'), null)
+  assert.deepEqual(await deleteEntry(root, 'link'), { ok: true })
+  assert.equal(await readFile(outside, 'utf8'), 'keep this outside content')
+  await assert.rejects(lstat(link), { code: 'ENOENT' })
+  await symlink(join(parent, 'missing'), link)
+  assert.deepEqual(await deleteEntry(root, 'link'), { ok: true }, 'dangling links can also be removed')
+  assert.ok('error' in await deleteEntry(root, '../outside.txt'))
+  assert.equal(await readFile(outside, 'utf8'), 'keep this outside content')
+})
+
+test('a symlink within the workspace remains usable', async () => {
+  const root = scratchDir('inside-link')
+  await mkdir(join(root, 'notes'))
+  await writeFile(join(root, 'notes/a.txt'), 'hello')
+  await symlink(join(root, 'notes'), join(root, 'link'))
+  assert.equal((await readWorkspaceFile(root, 'link/a.txt'))?.content, 'hello')
+})
+
+test('renaming onto an existing file preserves both files, including concurrent renames', async () => {
+  const root = scratchDir('rename-conflict')
+  await writeFile(join(root, 'a.txt'), 'a')
+  await writeFile(join(root, 'b.txt'), 'b')
+  assert.ok('error' in await renameEntry(root, 'a.txt', 'b.txt'))
+  assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'a')
+  assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), 'b')
+  const results = await Promise.all([renameEntry(root, 'a.txt', 'c.txt'), renameEntry(root, 'b.txt', 'c.txt')])
+  assert.equal(results.filter(result => 'path' in result).length, 1)
+  const remaining = await listDirectory(root)
+  assert.equal(remaining?.length, 2)
+})
+
+test('duplicating the workspace root is refused', async () => {
+  assert.ok('error' in await duplicateEntry(scratchDir('duplicate-root'), ''))
 })
 
 test('a directory lists its entries and hides the git store', async () => {

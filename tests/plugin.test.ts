@@ -50,6 +50,7 @@ test('the plugin mounts into a real Cordis composition and releases its routes',
   const dir = scratchDir('plugin')
   const ctx = new Context()
   const webServer = fakeWebServer()
+  ctx.provide('connection', { requestRejection: () => undefined })
   ctx.provide('webServer', webServer)
   ctx.provide('sessionController', {
     list: async () => ({ items: [] }),
@@ -115,6 +116,7 @@ test('the identity is stable across mounts', async () => {
   const mount = async (): Promise<string> => {
     const ctx = new Context()
     const webServer = fakeWebServer()
+    ctx.provide('connection', { requestRejection: () => undefined })
     ctx.provide('webServer', webServer)
     ctx.provide('sessionController', { list: async () => ({ items: [] }) })
     ctx.provide('workspaceRegistry', { list: () => [] })
@@ -129,4 +131,61 @@ test('the identity is stable across mounts', async () => {
   const second = await mount()
   assert.equal(first, second)
   assert.match(first, /^srv_[A-Za-z0-9_-]{12}$/)
+})
+
+test('sensitive HTTP routes require harness authentication and remote control requires a password', async () => {
+  for (const rejection of [401, 403, undefined]) {
+    const ctx = new Context()
+    const webServer = fakeWebServer()
+    if (rejection !== undefined) ctx.provide('connection', { requestRejection: () => rejection })
+    ctx.provide('webServer', webServer)
+    ctx.provide('sessionController', { list: async () => ({ items: [] }) })
+    ctx.provide('workspaceRegistry', { list: () => [] })
+    ctx.provide('sessions', { get: () => undefined, list: () => [] })
+    const fiber = await ctx.plugin(PaseoServer as unknown as Parameters<typeof ctx.plugin>[0], {
+      passwordEnv: 'DSH_TEST_PASEO_MISSING_PASSWORD',
+      dataDir: scratchDir('private-routes'),
+    })
+    try {
+      for (const path of ['/api/status', '/paseo/pairing', '/paseo/pairing.svg', '/paseo/diagnostics', '/paseo/proxy']) {
+        const res = fakeResponse()
+        await webServer.routes.get(path)?.handler({} as never, res as never)
+        assert.equal(res.statusCode, rejection ?? 503, path)
+        assert.equal(res.state.body.includes('srv_'), false, path)
+      }
+      const sent: string[] = []
+      let destroyed = false
+      const upgrade = webServer.upgrades.get('/ws')
+      assert.ok(upgrade !== undefined)
+      await upgrade.handler({ socket: { remoteAddress: '192.168.1.10' }, headers: {} } as never, {
+        write: (text: string) => { sent.push(text) }, destroy: () => { destroyed = true },
+      } as never, Buffer.alloc(0))
+      assert.match(sent[0] ?? '', /403 Forbidden/)
+      assert.equal(destroyed, true)
+    } finally {
+      await fiber.dispose()
+    }
+  }
+})
+
+test('missing relay password is reported as disabled, rather than starting a public relay', async () => {
+  const ctx = new Context()
+  const webServer = fakeWebServer()
+  ctx.provide('connection', { requestRejection: () => undefined })
+  ctx.provide('webServer', webServer)
+  ctx.provide('sessionController', { list: async () => ({ items: [] }) })
+  ctx.provide('workspaceRegistry', { list: () => [] })
+  ctx.provide('sessions', { get: () => undefined, list: () => [] })
+  const fiber = await ctx.plugin(PaseoServer as unknown as Parameters<typeof ctx.plugin>[0], {
+    passwordEnv: 'DSH_TEST_PASEO_MISSING_PASSWORD', dataDir: scratchDir('relay-password'),
+  })
+  try {
+    const res = fakeResponse()
+    await webServer.routes.get('/paseo/pairing')?.handler({} as never, res as never)
+    const body = JSON.parse(res.state.body)
+    assert.equal(body.relayEnabled, false)
+    assert.equal(body.relayConnected, false)
+  } finally {
+    await fiber.dispose()
+  }
 })

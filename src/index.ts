@@ -25,11 +25,11 @@ import type { RelayTransport } from './paseo/relay.ts'
 import { upgradeWebSocket } from './paseo/websocket.ts'
 import { DEFAULT_ALLOWED_ORIGINS, originAllowed, rejectUpgrade } from './paseo/origin.ts'
 import { createReadStream } from 'node:fs'
-import type { ServerResponse } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { stat } from 'node:fs/promises'
 import { PROXY_PREFIX, forwardScriptRequest, parseProxyPath } from './paseo/script-proxy.ts'
 import type { DownloadGrant } from './dsh/files.ts'
-import type { HostContext, JobsLike, WebServerLike } from './host.ts'
+import type { HostContext, JobsLike, WebRouteLike, WebServerLike } from './host.ts'
 import type { Volatile } from '@deepseek-ai/cordis'
 
 /** Plugin name as it appears in the loader. */
@@ -190,6 +190,9 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
     const value = process.env[live().passwordEnv]
     return value !== undefined && value.length > 0 ? value : undefined
   }
+  const daemonPassword = password()
+  const relayEnabled = live().relayEnabled && daemonPassword !== undefined
+  if (live().relayEnabled && !relayEnabled) logger.warn(`paseo-server: set ${live().passwordEnv} and restart to enable authenticated relay access`)
 
   let pairing: PairingInfo = pairingInfo(live(), identity)
   // The offer callback is synchronous, so the terminal QR is rendered once and
@@ -223,9 +226,9 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
     bridge,
     logger: daemonLogger,
     hostname: process.env.HOSTNAME ?? 'dsh',
-    password: password(),
+    password: daemonPassword,
     ...(webServer?.host === undefined || webServer.port === undefined ? {} : { listen: `${webServer.host}:${webServer.port}` }),
-    pairingOffer: () => ({ url: pairing.url, qr: pairingQr, relayEnabled: live().relayEnabled }),
+    pairingOffer: () => ({ url: pairing.url, qr: pairingQr, relayEnabled }),
   })
   daemon.start()
 
@@ -233,12 +236,29 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
   let relay: RelayTransport | undefined
 
   if (webServer !== undefined) {
+    const registerPrivate = (route: WebRouteLike): (() => void) => webServer.register({
+      ...route,
+      handler: (req, res) => {
+        const connection = ctx.get('connection') as { requestRejection(req: IncomingMessage): number | undefined } | undefined
+        const rejection = connection === undefined ? 503 : connection.requestRejection(req)
+        if (rejection !== undefined) {
+          sendJson(res, rejection, { error: 'an authenticated harness connection is required' })
+          return
+        }
+        return route.handler(req, res)
+      },
+    })
     const listenerOrigin = webServer.host === undefined || webServer.port === undefined
       ? undefined
       : `${webServer.protocol ?? 'http:'}//${webServer.host}:${webServer.port}`
     ctx.effect(() => webServer.registerUpgrade({
       path: live().wsPath,
       handler: (req, socket, head) => {
+        const address = req.socket.remoteAddress ?? ''
+        if (daemonPassword === undefined && address !== '::1' && !/^(?:::ffff:)?127\./u.test(address)) {
+          rejectUpgrade(socket)
+          return
+        }
         const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
         if (!originAllowed(origin, live().allowedOrigins, listenerOrigin)) {
           logger.warn(`paseo-server: refused an upgrade from origin ${String(origin)}`)
@@ -255,7 +275,7 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
       handler: (_req, res) => { sendJson(res, 200, { status: 'ok', timestamp: new Date().toISOString() }) },
     }), 'paseo-server: health route')
 
-    ctx.effect(() => webServer.register({
+    ctx.effect(() => registerPrivate({
       kind: 'exact',
       path: ROUTE_STATUS,
       handler: (_req, res) => {
@@ -269,7 +289,7 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
       },
     }), 'paseo-server: status route')
 
-    ctx.effect(() => webServer.register({
+    ctx.effect(() => registerPrivate({
       kind: 'exact',
       path: ROUTE_PAIRING,
       handler: (_req, res) => {
@@ -277,7 +297,7 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
           serverId: identity.serverId,
           url: pairing.url,
           uri: pairing.uri,
-          relayEnabled: live().relayEnabled,
+          relayEnabled,
           relayConnected: relay !== undefined,
           wsPath: live().wsPath,
           appBaseUrl: live().appBaseUrl,
@@ -285,7 +305,7 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
       },
     }), 'paseo-server: pairing route')
 
-    ctx.effect(() => webServer.register({
+    ctx.effect(() => registerPrivate({
       kind: 'exact',
       path: ROUTE_PAIRING_QR,
       handler: async (_req, res) => {
@@ -303,7 +323,7 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
 
     // What clients asked for, so an empty list on a client can be traced to a
     // request this daemon could not answer instead of guessed at.
-    ctx.effect(() => webServer.register({
+    ctx.effect(() => registerPrivate({
       kind: 'exact',
       path: ROUTE_DIAGNOSTICS,
       handler: (_req, res) => { sendJson(res, 200, daemon.requestReport()) },
@@ -332,7 +352,7 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
 
     // A workspace script's proxy URL points here: the daemon forwards to the
     // script's own loopback port, because it publishes no tunnel of its own.
-    ctx.effect(() => webServer.register({
+    ctx.effect(() => registerPrivate({
       kind: 'prefix',
       path: PROXY_PREFIX,
       handler: async (req, res) => {
@@ -358,7 +378,7 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
     logger.warn('paseo-server: the webServer service is not mounted; only the relay can reach this daemon')
   }
 
-  if (live().relayEnabled) {
+  if (relayEnabled) {
     relay = startRelayTransport({
       endpoint: live().relayEndpoint,
       useTls: live().relayUseTls,
@@ -368,7 +388,11 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
       onConnection: (socket) => {
         const connection = daemon.attach(socket)
         logger.info(`paseo-server: relay client admitted (${daemon.size} connected)`)
-        return { message: (text) => { connection.receive(text) }, close: () => { connection.dispose() } }
+        return {
+          message: (text) => { connection.receive(text) },
+          binary: (bytes) => { connection.receiveBinary(bytes) },
+          close: () => { connection.dispose() },
+        }
       },
     })
 

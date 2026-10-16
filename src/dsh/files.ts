@@ -8,9 +8,9 @@
  * @module dsh-paseo-server/dsh/files
  */
 
-import { appendFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, cp, link, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** One directory entry. */
 export interface DirectoryEntry {
@@ -49,16 +49,34 @@ const IMAGE_TYPES: Readonly<Record<string, string>> = {
  * Resolve one requested path inside a workspace directory.
  * @param base - advertised workspace directory.
  * @param requested - relative path the client asked for, or empty for the root.
+ * @param followFinalSymlink - false for deleting the entry itself, never its target.
  * @returns the absolute path, or null when it escapes the workspace.
  */
-export function resolveInside(base: string, requested: string | undefined): string | null {
+export async function resolveInside(base: string, requested: string | undefined, followFinalSymlink = true): Promise<string | null> {
   const root = resolve(base)
   const wanted = requested === undefined || requested.length === 0 ? '.' : requested
   if (isAbsolute(wanted)) return null
   const target = resolve(root, wanted)
   const inside = relative(root, target)
-  if (inside.startsWith('..') || isAbsolute(inside)) return null
-  return target
+  if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null
+  try {
+    const realRoot = await realpath(root)
+    let existing = !followFinalSymlink && target !== root ? dirname(target) : target
+    for (;;) {
+      try {
+        const resolved = await realpath(existing)
+        const rel = relative(realRoot, resolved)
+        return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? null : target
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || existing === root) return null
+        // A dangling link must not be treated as an absent path to create.
+        if (await lstat(existing).then(() => true, () => false)) return null
+        existing = dirname(existing)
+      }
+    }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -68,7 +86,7 @@ export function resolveInside(base: string, requested: string | undefined): stri
  * @returns the entries sorted by name, or null when the path is not a readable directory.
  */
 export async function listDirectory(base: string, requested?: string): Promise<readonly DirectoryEntry[] | null> {
-  const target = resolveInside(base, requested)
+  const target = await resolveInside(base, requested)
   if (target === null) return null
   try {
     const found = await readdir(target, { withFileTypes: true })
@@ -79,7 +97,7 @@ export async function listDirectory(base: string, requested?: string): Promise<r
       let size = 0
       let modifiedAt = new Date(0).toISOString()
       try {
-        const info = await stat(full)
+        const info = await lstat(full)
         size = info.size
         modifiedAt = info.mtime.toISOString()
       } catch {
@@ -106,7 +124,7 @@ export async function listDirectory(base: string, requested?: string): Promise<r
  * @returns the content, or null when the path is unreadable or too large.
  */
 export async function readWorkspaceFile(base: string, requested: string): Promise<FileContent | null> {
-  const target = resolveInside(base, requested)
+  const target = await resolveInside(base, requested)
   if (target === null) return null
   try {
     const info = await stat(target)
@@ -251,7 +269,7 @@ export async function writeWorkspaceFile(
   content: string,
   expectedModifiedAt: string,
 ): Promise<WriteOutcome> {
-  const target = resolveInside(base, requested)
+  const target = await resolveInside(base, requested)
   if (target === null) return { status: 'error', error: 'the path escapes its workspace' }
   const current = await statOrNull(target)
   if (current !== null && current.mtime.toISOString() !== expectedModifiedAt) {
@@ -274,10 +292,10 @@ export async function createEntry(
   kind: 'file' | 'directory',
 ): Promise<{ readonly path: string } | { readonly error: string }> {
   if (name.length === 0 || name.includes('/')) return { error: 'a name must be one path segment' }
-  const parent = resolveInside(base, parentPath)
+  const parent = await resolveInside(base, parentPath)
   if (parent === null) return { error: 'the parent escapes its workspace' }
   const target = join(parent, name)
-  if (resolveInside(base, relative(resolve(base), target)) === null) return { error: 'the target escapes its workspace' }
+  if (await resolveInside(base, relative(resolve(base), target)) === null) return { error: 'the target escapes its workspace' }
   try {
     if (kind === 'directory') await mkdir(target, { recursive: false })
     else await writeFile(target, '', { flag: 'wx' })
@@ -289,7 +307,7 @@ export async function createEntry(
 
 /** Whether one path inside a workspace exists. */
 export async function entryExists(base: string, requested: string): Promise<boolean> {
-  const target = resolveInside(base, requested)
+  const target = await resolveInside(base, requested)
   return target !== null && await statOrNull(target) !== null
 }
 
@@ -300,12 +318,20 @@ export async function renameEntry(
   name: string,
 ): Promise<{ readonly path: string } | { readonly error: string }> {
   if (name.length === 0 || name.includes('/')) return { error: 'a name must be one path segment' }
-  const source = resolveInside(base, requested)
+  const source = await resolveInside(base, requested)
   if (source === null) return { error: 'the path escapes its workspace' }
   const target = join(dirname(source), name)
-  if (resolveInside(base, relative(resolve(base), target)) === null) return { error: 'the target escapes its workspace' }
+  if (await resolveInside(base, relative(resolve(base), target)) === null) return { error: 'the target escapes its workspace' }
+  if (source === target) return { path: relative(resolve(base), target) }
   try {
-    await rename(source, target)
+    if ((await lstat(source)).isDirectory()) {
+      if (await lstat(target).then(() => true, () => false)) return { error: 'the target already exists' }
+      await rename(source, target)
+    } else {
+      // link refuses an existing destination atomically; rename overwrites it.
+      await link(source, target)
+      await unlink(source)
+    }
     return { path: relative(resolve(base), target) }
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) }
@@ -314,7 +340,7 @@ export async function renameEntry(
 
 /** Delete one entry inside a workspace, recursively for a directory. */
 export async function deleteEntry(base: string, requested: string): Promise<{ readonly ok: true } | { readonly error: string }> {
-  const target = resolveInside(base, requested)
+  const target = await resolveInside(base, requested, false)
   if (target === null) return { error: 'the path escapes its workspace' }
   if (target === resolve(base)) return { error: 'the workspace root cannot be deleted' }
   try {
@@ -327,8 +353,9 @@ export async function deleteEntry(base: string, requested: string): Promise<{ re
 
 /** Copy one entry next to itself under a fresh name, as a client duplicate does. */
 export async function duplicateEntry(base: string, requested: string): Promise<{ readonly path: string } | { readonly error: string }> {
-  const source = resolveInside(base, requested)
+  const source = await resolveInside(base, requested)
   if (source === null) return { error: 'the path escapes its workspace' }
+  if (source === resolve(base)) return { error: 'the workspace root cannot be duplicated' }
   const extension = extname(source)
   const stem = source.slice(0, source.length - extension.length)
   for (let copy = 1; copy < 100; copy += 1) {
@@ -349,7 +376,7 @@ export async function statEntry(
   base: string,
   requested: string,
 ): Promise<{ readonly size: number; readonly modifiedAt: string } | null> {
-  const target = resolveInside(base, requested)
+  const target = await resolveInside(base, requested)
   if (target === null) return null
   const info = await statOrNull(target)
   return info === null ? null : { size: info.size, modifiedAt: info.mtime.toISOString() }

@@ -14,8 +14,8 @@
  * @module dsh-paseo-server/paseo/script-proxy
  */
 
-import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { request } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 /** Path prefix the proxy is registered under. */
@@ -52,7 +52,11 @@ export function parseProxyPath(pathname: string): { readonly workspaceId: string
   const [workspaceId, scriptName, ...rest] = pathname.slice(PROXY_PREFIX.length + 1).split('/')
   if (workspaceId === undefined || workspaceId.length === 0) return null
   if (scriptName === undefined || scriptName.length === 0) return null
-  return { workspaceId, scriptName, rest: rest.length === 0 ? '/' : `/${rest.join('/')}` }
+  try {
+    return { workspaceId: decodeURIComponent(workspaceId), scriptName: decodeURIComponent(scriptName), rest: rest.length === 0 ? '/' : `/${rest.join('/')}` }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -68,29 +72,35 @@ export async function forwardScriptRequest(
   rest: string,
 ): Promise<void> {
   const search = req.url === undefined ? '' : new URL(req.url, 'http://localhost').search
-  const headers = new Headers()
+  const headers: Record<string, string | string[]> = {}
   for (const [name, value] of Object.entries(req.headers)) {
-    if (typeof value !== 'string' || HOP_BY_HOP.has(name)) continue
-    headers.set(name, value)
+    if (value === undefined || HOP_BY_HOP.has(name)) continue
+    headers[name] = value
   }
   try {
-    const upstream = await fetch(`http://127.0.0.1:${String(target.port)}${rest}${search}`, {
-      method: req.method,
-      headers,
-      body: req.method === 'GET' || req.method === 'HEAD' ? undefined : req,
-      ...{ duplex: 'half' },
-    } as RequestInit)
-    const responseHeaders: Record<string, string | string[]> = {}
-    upstream.headers.forEach((value, name) => {
-      if (!HOP_BY_HOP.has(name)) responseHeaders[name] = value
+    // HTTP streams preserve compressed bytes, redirects, and separate cookies.
+    await new Promise<void>((resolve, reject) => {
+      const upstream = request({ hostname: '127.0.0.1', port: target.port, path: `${rest}${search}`, method: req.method, headers }, (response) => {
+        const responseHeaders: Record<string, string | string[]> = {}
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (value !== undefined && !HOP_BY_HOP.has(name)) responseHeaders[name] = value
+        }
+        res.writeHead(response.statusCode ?? 502, responseHeaders)
+        void pipeline(response, res).then(resolve, reject)
+      })
+      const onClose = (): void => { upstream.destroy() }
+      res.once('close', onClose)
+      upstream.once('close', () => { res.off('close', onClose) })
+      upstream.once('error', reject)
+      upstream.setTimeout(30_000, () => { upstream.destroy(new Error('script response timed out')) })
+      if (req.method === 'GET' || req.method === 'HEAD') upstream.end()
+      else void pipeline(req, upstream).catch(reject)
     })
-    res.writeHead(upstream.status, responseHeaders)
-    if (upstream.body === null) {
-      res.end()
+  } catch (error) {
+    if (res.headersSent || res.destroyed) {
+      res.destroy(error instanceof Error ? error : undefined)
       return
     }
-    await pipeline(Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]), res)
-  } catch (error) {
     // A script that is not listening is the normal failure here, not a bug.
     res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
     res.end(`script ${target.scriptName} is not answering on port ${String(target.port)}: ${error instanceof Error ? error.message : String(error)}\n`)

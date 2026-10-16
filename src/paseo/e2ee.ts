@@ -10,6 +10,8 @@
  */
 
 import nacl from 'tweetnacl'
+import { isTransferOpcode } from './file-transfer.ts'
+import { decodeTerminalFrame } from './terminal-frames.ts'
 
 /** Bytes each encrypted frame adds over its plaintext. */
 export const ENCRYPTED_PAYLOAD_OVERHEAD_BYTES = 40
@@ -34,6 +36,8 @@ export interface ChannelSocket {
 export interface ChannelEvents {
   /** One decrypted application frame. */
   message(text: string): void
+  /** One decrypted terminal or file-transfer frame. */
+  binary?(bytes: Uint8Array): void
   /** The peer closed, or the handshake failed. */
   close(): void
 }
@@ -71,7 +75,9 @@ export class DaemonChannel {
       return
     }
     const plaintext = this.decrypt(data)
-    if (plaintext !== undefined) this.events.message(plaintext)
+    if (plaintext === undefined) return
+    if (isTransferOpcode(plaintext[0] ?? -1) || decodeTerminalFrame(plaintext) !== null) this.events.binary?.(plaintext)
+    else this.events.message(new TextDecoder().decode(plaintext))
   }
 
   /**
@@ -135,7 +141,7 @@ export class DaemonChannel {
     }))
   }
 
-  private decrypt(data: string | Uint8Array): string | undefined {
+  private decrypt(data: string | Uint8Array): Uint8Array | undefined {
     const key = this.sharedKey
     if (key === undefined) return undefined
     const bundle = typeof data === 'string'
@@ -146,7 +152,7 @@ export class DaemonChannel {
     const ciphertext = bundle.subarray(NONCE_BYTES)
     const plaintext = nacl.box.open.after(ciphertext, nonce, key)
     if (plaintext === null) return undefined
-    return new TextDecoder().decode(plaintext)
+    return plaintext
   }
 }
 

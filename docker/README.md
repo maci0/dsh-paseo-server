@@ -46,8 +46,8 @@ curl -s localhost:9222/json/list | grep -E '"(url|title)"'
 bun .scratch/cdp.ts shot shot.png
 
 # Open a pairing link and confirm it.
-URL=$(curl -s localhost:3080/paseo/pairing | jq -r .url)
-bun .scratch/cdp.ts open "$URL"
+PAIRING_URL='paste the pairing link from the authenticated Plugins card'
+bun .scratch/cdp.ts open "$PAIRING_URL"
 bun .scratch/cdp.ts eval "(() => { [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Connect').click(); return 'clicked' })()"
 ```
 

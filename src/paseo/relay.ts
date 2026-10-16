@@ -116,9 +116,9 @@ export function startRelayTransport(options: RelayOptions): RelayTransport {
     sockets.set(connectionId, socket)
 
     let wired = false
-    let deliver: ((text: string) => void) | undefined
+    let deliver: ((frame: string | Uint8Array) => void) | undefined
     let onClose: (() => void) | undefined
-    const buffered: string[] = []
+    const buffered: Array<string | Uint8Array> = []
     const handshakeTimer = setTimeout(() => {
       if (!wired) {
         socket.close(1011, 'E2EE handshake failed')
@@ -139,6 +139,10 @@ export function startRelayTransport(options: RelayOptions): RelayTransport {
           if (deliver !== undefined) deliver(text)
           else buffered.push(text)
         },
+        binary: (bytes) => {
+          if (deliver !== undefined) deliver(bytes)
+          else buffered.push(bytes)
+        },
         close: () => { onClose?.() },
       },
     )
@@ -157,7 +161,10 @@ export function startRelayTransport(options: RelayOptions): RelayTransport {
         close: (code, reason) => { channel.close(code, reason) },
         detach: () => { deliver = undefined },
       })
-      deliver = (text) => { events.message(text) }
+      deliver = (frame) => {
+        if (typeof frame === 'string') events.message(frame)
+        else events.binary?.(frame)
+      }
       onClose = () => { events.close() }
       for (const text of buffered.splice(0)) deliver(text)
     })

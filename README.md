@@ -13,10 +13,15 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 ## Install
 
 ```bash
-dsh plugin --profile web add @maci0/dsh-paseo-server@0.16.2
+dsh plugin --profile web add --save-exact @maci0/dsh-paseo-server@0.17.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
+
+Set the environment variable named by `passwordEnv` (default `PASEO_PASSWORD`)
+before restarting to use the relay or LAN control. Enter that password in the
+Paseo client. Without it, only direct loopback control is admitted and the relay
+stays off.
 
 - `ws://<host>:<port>/ws` is the Paseo daemon socket.
 - `GET /paseo/pairing` reports the pairing offer.
@@ -45,12 +50,12 @@ Every field is editable from the Plugins page.
 | --- | --- | --- |
 | `enabled` | `true` | Mount the daemon at all. |
 | `wsPath` | `/ws` | Path the Paseo client connects to. |
-| `relayEnabled` | `true` | Dial the Paseo relay for off-LAN access. |
+| `relayEnabled` | `true` | Dial the Paseo relay for off-LAN access when a password is configured. |
 | `relayEndpoint` | `relay.paseo.sh:443` | Relay host and port. |
 | `relayUseTls` | `true` | Use TLS for the relay connection. |
 | `appBaseUrl` | `https://app.paseo.sh` | Origin the pairing link points at. |
 | `allowedOrigins` | `https://app.paseo.sh`, `paseo://app` | Browser origins allowed to open the Paseo socket. |
-| `passwordEnv` | `PASEO_PASSWORD` | Environment variable naming the daemon password; unset means no password. |
+| `passwordEnv` | `PASEO_PASSWORD` | Environment variable naming the daemon password; required for relay and LAN control. Restart after changing it. |
 | `dataDir` | `$DSH_HOME/paseo-server` | Server id and key pair. |
 | `defaultProvider` | `deepseek` | Provider reported when a session has no recorded header. |
 | `defaultModel` | `deepseek-flash` | Model reported in the same case. |
@@ -71,8 +76,12 @@ is a timeline row.
   carries a foreign `Origin` is refused with 403; a native client sends no
   origin and is admitted. `allowedOrigins` extends the list.
 - Whoever knows the server id can claim the daemon's control socket on the
-  relay and deny service. Set `passwordEnv` to require a password on `hello`
-  for defence in depth.
+  relay and deny service. Relay and LAN sessions require the configured password
+  on `hello`; the relay is not started when the password is missing.
+- Pairing, diagnostics, server status, and script proxies use the harness's
+  authenticated Host/Origin fence. Open them from an authenticated harness
+  browser session; raw unauthenticated HTTP requests are refused. File downloads
+  use their single-use capability token.
 - The identity files are written owner-only (`0600`).
 
 ## Ungrouped conversations
@@ -91,7 +100,7 @@ this daemon or a request it could not answer, and that endpoint tells the two
 apart.
 
 ```bash
-curl -s localhost:3080/paseo/diagnostics
+curl -s -b /path/to/harness-session.cookies localhost:3080/paseo/diagnostics
 ```
 
 ## Status
@@ -146,14 +155,16 @@ The plugin needs no Android build: it is reachable from an emulator at
 
 ```bash
 emulator -avd <avd> &
-adb shell am start -a android.intent.action.VIEW -d "$(curl -s localhost:3080/paseo/pairing | jq -r .url)"
+PAIRING_URL='paste the pairing link from the authenticated Plugins card'
+adb shell am start -a android.intent.action.VIEW -d "$PAIRING_URL"
 ```
 
 That opens the Paseo client with the pairing offer and shows the confirm
 dialog with this daemon's server id, key fingerprint, and relay. What was
 verified here:
 
-- `GET /api/status` over HTTP from inside the emulator, through `10.0.2.2`.
+- HTTP connectivity through `10.0.2.2`. Current unauthenticated connectivity
+  probes use `/api/health`; `/api/status` requires a harness login.
 - The pairing offer opened in the emulator's client, showing
   `srv_...`, the public-key fingerprint, and `relay.paseo.sh:443`, then
   connecting and listing this daemon's DSH workspaces and agents.
@@ -173,7 +184,8 @@ protocol drives it:
 
 ```bash
 PASEO_TARBALL=~/Downloads/Paseo-0.11.2-x64.tar.gz docker/run-headless.sh
-bun .scratch/cdp.ts open "$(curl -s localhost:3080/paseo/pairing | jq -r .url)"
+PAIRING_URL='paste the pairing link from the authenticated Plugins card'
+bun .scratch/cdp.ts open "$PAIRING_URL"
 ```
 
 See [docker/README.md](docker/README.md) for the whole flow. Verified: the

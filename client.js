@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
       summary: 'Scan the pairing QR, or copy the pairing link into the Paseo app.',
       open: 'Open in Paseo',
       download: 'Save QR as SVG',
-      hint: 'The link is a credential: anyone who has it can drive this daemon.',
+      hint: 'Keep the pairing link private. Relay and LAN connections also require the daemon password.',
     }
 
     const zh = {
@@ -80,7 +80,7 @@ window.__ModuleLoader__.load({
       summary: '扫描配对二维码，或将配对链接复制到 Paseo 应用中。',
       open: '在 Paseo 中打开',
       download: '下载二维码 SVG',
-      hint: '该链接等同凭据：任何持有它的人都能操控此守护进程。',
+      hint: '请妥善保管配对链接。中继和局域网连接还需要守护进程密码。',
     }
 
     /** Inject the card stylesheet once. */

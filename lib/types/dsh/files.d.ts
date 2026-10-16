@@ -29,9 +29,10 @@ export interface FileContent {
  * Resolve one requested path inside a workspace directory.
  * @param base - advertised workspace directory.
  * @param requested - relative path the client asked for, or empty for the root.
+ * @param followFinalSymlink - false for deleting the entry itself, never its target.
  * @returns the absolute path, or null when it escapes the workspace.
  */
-export declare function resolveInside(base: string, requested: string | undefined): string | null;
+export declare function resolveInside(base: string, requested: string | undefined, followFinalSymlink?: boolean): Promise<string | null>;
 /**
  * List one directory.
  * @param base - workspace directory.

@@ -12,6 +12,8 @@ import { test } from 'node:test'
 import nacl from 'tweetnacl'
 import { DaemonChannel, ENCRYPTED_PAYLOAD_OVERHEAD_BYTES } from '../src/paseo/e2ee.ts'
 import { generateKeyPair, decodeKeyPair } from '../src/paseo/identity.ts'
+import { encodeTerminalFrame, TERMINAL_OPCODE } from '../src/paseo/terminal-frames.ts'
+import { encodeFileTransferFrame, FILE_OPCODE } from '../src/paseo/file-transfer.ts'
 
 /** A socket that records everything sent to it. */
 function recordingSocket() {
@@ -97,4 +99,35 @@ test('a handshake with a bad key closes the socket instead of trusting it', () =
   channel.receive(JSON.stringify({ type: 'e2ee_hello', key: Buffer.from('short').toString('base64') }))
   assert.equal(closes.length, 1)
   assert.equal(closes[0]?.code, 1008)
+})
+
+test('encrypted terminal and upload frames retain every byte in both directions', () => {
+  const daemonKeys = decodeKeyPair(generateKeyPair())
+  const clientKeys = nacl.box.keyPair()
+  const socket = recordingSocket()
+  const received: Uint8Array[] = []
+  const channel = new DaemonChannel(socket, daemonKeys, {
+    message: () => { assert.fail('binary frames must not be decoded as text') },
+    binary: (bytes) => { received.push(bytes) },
+    close: () => {},
+  })
+  channel.receive(JSON.stringify({ type: 'e2ee_hello', key: Buffer.from(clientKeys.publicKey).toString('base64'), capabilities: { binaryCiphertext: true } }))
+  const shared = nacl.box.before(daemonKeys.publicKey, clientKeys.secretKey)
+  const frames = [
+    encodeTerminalFrame(TERMINAL_OPCODE.INPUT, 255, new Uint8Array([0, 128, 255])),
+    encodeFileTransferFrame({ opcode: FILE_OPCODE.CHUNK, requestId: 'upload', payload: new Uint8Array([0, 128, 255]) }),
+  ]
+  for (const plaintext of frames) {
+    const nonce = nacl.randomBytes(nacl.box.nonceLength)
+    const ciphertext = nacl.box.after(plaintext, nonce, shared)
+    const bundle = new Uint8Array(nonce.length + ciphertext.length)
+    bundle.set(nonce)
+    bundle.set(ciphertext, nonce.length)
+    channel.receive(bundle)
+    channel.receive(Buffer.from(bundle).toString('base64'))
+    channel.sendBytes(plaintext)
+    const outbound = socket.sent.at(-1) as Uint8Array
+    assert.deepEqual(nacl.box.open.after(outbound.subarray(nacl.box.nonceLength), outbound.subarray(0, nacl.box.nonceLength), shared), plaintext)
+  }
+  assert.deepEqual(received, frames.flatMap((frame) => [frame, frame]))
 })
