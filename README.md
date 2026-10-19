@@ -12,8 +12,10 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 
 ## Install
 
+Requires DeepSeek Harness `>=0.2.1-rc.2 <0.3.0`. Restart DSH and refresh the browser after upgrading.
+
 ```bash
-dsh plugin --profile web add --save-exact @maci0/dsh-paseo-server@0.17.0
+dsh plugin --profile web add --save-exact @maci0/dsh-paseo-server@0.18.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
