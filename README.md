@@ -15,7 +15,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 Requires DeepSeek Harness `>=0.2.2-rc.4 <0.3.0`. Restart DSH and refresh the browser after upgrading.
 
 ```bash
-dsh plugin --profile web add --save-exact @maci0/dsh-paseo-server@0.18.3
+dsh plugin --profile web add --save-exact @maci0/dsh-paseo-server@0.18.4
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -81,9 +81,12 @@ is a timeline row.
   relay and deny service. Relay and LAN sessions require the configured password
   on `hello`; the relay is not started when the password is missing.
 - Pairing, diagnostics, server status, and script proxies use the harness's
-  authenticated Host/Origin fence. Open them from an authenticated harness
-  browser session; raw unauthenticated HTTP requests are refused. File downloads
-  use their single-use capability token.
+  authenticated Host/Origin fence where the harness still provides it, and the
+  WebServer's default `required` route admission where it does not. Open them
+  from an authenticated harness browser session; raw unauthenticated HTTP
+  requests are refused. `/ws`, `/api/health` and file downloads are registered
+  `anonymous`: the socket checks its password and origin, a download its
+  single-use capability token, and health returns only liveness.
 - The identity files are written owner-only (`0600`).
 
 ## Ungrouped conversations
@@ -130,8 +133,8 @@ Every persisted session is an agent too, not only the ones live in the running
 process. A session the harness is not holding shows as idle, its transcript
 still reads, and prompting it resumes the session and runs the turn.
 
-The pairing QR renders twice: on the plugin's Plugins row, and as a Paseo tab
-in Settings > Plugins, which is the page a plugin's own settings belong on.
+The pairing QR renders on the plugin's Plugins row and on a Paseo page in
+Settings.
 
 Workspace labels and project names and icons are stored under the harness home
 and carried in the descriptors a client sidebar groups by.

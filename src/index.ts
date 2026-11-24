@@ -239,8 +239,9 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
     const registerPrivate = (route: WebRouteLike): (() => void) => webServer.register({
       ...route,
       handler: (req, res) => {
-        const connection = ctx.get('connection') as { requestRejection(req: IncomingMessage): number | undefined } | undefined
-        const rejection = connection === undefined ? 503 : connection.requestRejection(req)
+        const connection = ctx.get('connection') as { requestRejection?(req: IncomingMessage): number | undefined } | undefined
+        // Without `requestRejection` the WebServer already admitted the request (route `auth`, default `required`).
+        const rejection = connection === undefined ? 503 : connection.requestRejection?.(req)
         if (rejection !== undefined) {
           sendJson(res, rejection, { error: 'an authenticated harness connection is required' })
           return
@@ -253,6 +254,8 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
       : `${webServer.protocol ?? 'http:'}//${webServer.host}:${webServer.port}`
     ctx.effect(() => webServer.registerUpgrade({
       path: live().wsPath,
+      // The daemon checks the hello password; without one, only loopback is admitted.
+      auth: 'anonymous',
       handler: (req, socket, head) => {
         const address = req.socket.remoteAddress ?? ''
         if (daemonPassword === undefined && address !== '::1' && !/^(?:::ffff:)?127\./u.test(address)) {
@@ -272,6 +275,8 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: ROUTE_HEALTH,
+      // Liveness only: no state to protect, and the Paseo CLI probes it without a harness login.
+      auth: 'anonymous',
       handler: (_req, res) => { sendJson(res, 200, { status: 'ok', timestamp: new Date().toISOString() }) },
     }), 'paseo-server: health route')
 
@@ -334,6 +339,8 @@ export function apply(ctx: HostContext, row: Config | Options = {}): void {
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: ROUTE_DOWNLOAD,
+      // The single-use token is the credential.
+      auth: 'anonymous',
       handler: (req, res) => {
         const url = new URL(req.url ?? ROUTE_DOWNLOAD, 'http://localhost')
         const token = url.searchParams.get('token')

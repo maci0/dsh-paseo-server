@@ -49,7 +49,7 @@ workspace, most severe first: `needs_input`, `failed`, `running`, `attention`,
 
 | Paseo timeline item | DSH session event |
 | --- | --- |
-| `user_message` | `user/message` |
+| `user_message` | `user/message` from the user, or a subagent's delegated task: an `agent-message` from its `parentSession`, shown without the sender prefix block |
 | `assistant_message` | `assistant/message` |
 | `reasoning` | `assistant/attempt` reasoning content |
 | `tool_call` | `tool/call`, completed by `tool/result` |

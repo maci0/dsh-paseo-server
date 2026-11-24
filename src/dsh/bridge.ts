@@ -970,7 +970,7 @@ class DshBridge implements PaseoBridge {
     // durable history page instead. Sending it a prompt resumes it.
     const entries = session === undefined
       ? await this.coldTimeline(agentId)
-      : foldEvents(session.snapshotEvents(0, session.seq))
+      : foldEvents(session.snapshotEvents(0, session.seq), session.header.parentSession)
     return limit === undefined || entries.length <= limit ? entries : entries.slice(entries.length - limit)
   }
 
@@ -989,7 +989,8 @@ class DshBridge implements PaseoBridge {
         throughSeq: projections.asOfSeq,
         maxMessages: COLD_TIMELINE_PAGE_MESSAGES,
       }, signal)
-      return foldEvents(page.records.map((record) => record.event))
+      const parentSession = (await this.summaries()).find((item) => item.sessionId === agentId)?.parentSessionId
+      return foldEvents(page.records.map((record) => record.event), parentSession)
     } catch (error) {
       this.ctx.logger.warn(`paseo: cold timeline for ${agentId} failed: ${String(error)}`)
       return []
@@ -1581,7 +1582,7 @@ class DshBridge implements PaseoBridge {
       void this.publishAgent(session.id)
     }
     const clientMessageId = event.type === 'user/message' ? this.claimClientMessageId(session.id) : undefined
-    for (const entry of foldEvent(event, clientMessageId)) {
+    for (const entry of foldEvent(event, { clientMessageId, parentSession: session.header.parentSession })) {
       this.emit({ kind: 'timeline', agentId: session.id, entry })
     }
   }
@@ -1661,7 +1662,7 @@ class DshBridge implements PaseoBridge {
     }
   }
 
-  /** First human prompt, used as the agent title when DSH has no title. */
+  /** First human prompt or delegated task, used as the agent title when DSH has no title. */
   private titleOf(session: SessionLike | undefined): string | null {
     if (session === undefined) return null
     const cached = this.titles.get(session.id)
@@ -1669,8 +1670,9 @@ class DshBridge implements PaseoBridge {
     let title: string | null = null
     for (const event of session.snapshotEvents(0, session.seq)) {
       if (event.type !== 'user/message') continue
-      if (messageSourceKind(event.data) !== 'user') continue
-      title = titleFrom(messageText(event.data)) ?? null
+      const text = promptText(event.data, session.header.parentSession)
+      if (text === undefined) continue
+      title = titleFrom(text) ?? null
       break
     }
     this.titles.set(session.id, title)
@@ -1760,10 +1762,14 @@ class DshBridge implements PaseoBridge {
   }
 }
 
-/** Fold a whole log into timeline rows. */
-export function foldEvents(events: readonly SessionEventLike[]): TimelineEntry[] {
+/**
+ * Fold a whole log into timeline rows.
+ * @param events - committed session events, oldest first.
+ * @param parentSession - the Session's `parentSession` header, for a subagent.
+ */
+export function foldEvents(events: readonly SessionEventLike[], parentSession?: string): TimelineEntry[] {
   const entries: TimelineEntry[] = []
-  for (const event of events) entries.push(...foldEvent(event))
+  for (const event of events) entries.push(...foldEvent(event, { parentSession }))
   return entries
 }
 
@@ -1774,15 +1780,19 @@ export function foldEvents(events: readonly SessionEventLike[]): TimelineEntry[]
  * no duplicate running and completed rows. A live running indicator needs the
  * Paseo timeline-replacement surface, which this daemon does not advertise.
  * @param event - committed session event.
- * @param clientMessageId - identity the client minted for this submission, when it made it.
+ * @param context.clientMessageId - identity the client minted for this submission, when it made it.
+ * @param context.parentSession - the Session's `parentSession` header, for a subagent.
  * @returns the rows this event contributes.
  */
-export function foldEvent(event: SessionEventLike, clientMessageId?: string): TimelineEntry[] {
+export function foldEvent(
+  event: SessionEventLike,
+  context: { readonly clientMessageId?: string | undefined; readonly parentSession?: string | undefined } = {},
+): TimelineEntry[] {
+  const { clientMessageId, parentSession } = context
   const timestamp = new Date(event.time).toISOString()
   switch (event.type) {
     case 'user/message': {
-      if (messageSourceKind(event.data) !== 'user') return []
-      const text = messageText(event.data)
+      const text = promptText(event.data, parentSession)
       if (text === undefined || text.length === 0) return []
       const messageId = stringField(event.data, 'id')
       return [{
@@ -1870,9 +1880,20 @@ export function messageReasoning(message: Record<string, unknown>): string | und
 }
 
 /** `source.kind` of one message, when it carries a source. */
-function messageSourceKind(message: Record<string, unknown>): string | undefined {
+/**
+ * Text of a human prompt, or of a subagent's delegated task, which DSH records
+ * as an `agent-message` from the parent Session whose first block is the
+ * sender prefix. Sessions written before that change carry a `user` source.
+ * @returns undefined for any other user message, such as injected context.
+ */
+function promptText(message: Record<string, unknown>, parentSession: string | undefined): string | undefined {
   const source = recordField(message, 'source')
-  return source === undefined ? undefined : stringField(source, 'kind')
+  if (source === undefined) return undefined
+  const kind = stringField(source, 'kind')
+  if (kind === 'user') return messageText(message)
+  if (kind !== 'agent-message' || parentSession === undefined || stringField(source, 'senderSessionId') !== parentSession) return undefined
+  const content = message['content']
+  return Array.isArray(content) ? messageText({ content: content.slice(1) }) : undefined
 }
 
 function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {

@@ -29,6 +29,24 @@ test('a human prompt becomes a user_message row', () => {
   }])
 })
 
+test('a subagent task from its parent becomes a user_message row without the sender prefix', () => {
+  const task = event('user/message', 5, {
+    id: 'm3',
+    role: 'user',
+    source: { kind: 'agent-message', form: 'relay', senderSessionId: 'ses_parent' },
+    content: [{ type: 'text', text: 'Agent main sent a message: ' }, { type: 'text', text: 'review the diff' }],
+  })
+  assert.deepEqual(foldEvent(task, { parentSession: 'ses_parent' }), [{
+    item: { type: 'user_message', text: 'review the diff', messageId: 'm3' },
+    timestamp: new Date(1_760_000_000_005).toISOString(),
+    seq: 5,
+  }])
+  assert.deepEqual(foldEvents([task], 'ses_parent').map((row) => row.item), [{ type: 'user_message', text: 'review the diff', messageId: 'm3' }])
+  // Another sender, or a Session with no parent, is not the delegated task.
+  assert.deepEqual(foldEvent(task, { parentSession: 'ses_other' }), [])
+  assert.deepEqual(foldEvent(task), [])
+})
+
 test('injected context is not shown as a human prompt', () => {
   const rows = foldEvent(event('user/message', 4, {
     id: 'm2',
@@ -119,7 +137,7 @@ test('a user message carries the identity the client minted for it', () => {
     role: 'user',
     source: { kind: 'user' },
     content: [{ type: 'text', text: 'hello' }],
-  }), 'client_msg_9')
+  }), { clientMessageId: 'client_msg_9' })
   const item = rows[0]?.item
   assert.equal(item?.type, 'user_message')
   assert.equal(item?.type === 'user_message' ? item.messageId : null, 'msg_1')

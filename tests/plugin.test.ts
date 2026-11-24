@@ -168,6 +168,37 @@ test('sensitive HTTP routes require harness authentication and remote control re
   }
 })
 
+test('routes declare their WebServer admission, and a fenceless connection leaves it to the WebServer', async () => {
+  const ctx = new Context()
+  const webServer = fakeWebServer()
+  ctx.provide('connection', {})
+  ctx.provide('webServer', webServer)
+  ctx.provide('sessionController', { list: async () => ({ items: [] }) })
+  ctx.provide('workspaceRegistry', { list: () => [] })
+  ctx.provide('sessions', { get: () => undefined, list: () => [] })
+  const fiber = await ctx.plugin(PaseoServer as unknown as Parameters<typeof ctx.plugin>[0], {
+    passwordEnv: 'DSH_TEST_PASEO_MISSING_PASSWORD',
+    dataDir: scratchDir('route-auth'),
+  })
+  try {
+    for (const path of ['/api/status', '/paseo/pairing', '/paseo/diagnostics']) {
+      const route = webServer.routes.get(path)
+      assert.equal(route?.auth ?? 'required', 'required', path)
+      const res = fakeResponse()
+      await route?.handler({} as never, res as never)
+      assert.equal(res.statusCode, 200, path)
+    }
+    assert.equal(webServer.routes.get('/api/health')?.auth, 'anonymous')
+    assert.equal(webServer.routes.get('/api/files/download')?.auth, 'anonymous')
+    assert.equal(webServer.upgrades.get('/ws')?.auth, 'anonymous')
+    const res = fakeResponse()
+    await webServer.routes.get('/api/files/download')?.handler({ url: '/api/files/download?token=forged' } as never, res as never)
+    assert.equal(res.statusCode, 403, 'an anonymous download still needs its single-use token')
+  } finally {
+    await fiber.dispose()
+  }
+})
+
 test('missing relay password is reported as disabled, rather than starting a public relay', async () => {
   const ctx = new Context()
   const webServer = fakeWebServer()

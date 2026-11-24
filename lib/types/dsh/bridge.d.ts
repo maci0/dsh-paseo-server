@@ -25,8 +25,12 @@ export interface DshBridgeHandle extends PaseoBridge {
 }
 /** Binding that presents a DSH composition as a Paseo bridge. */
 export declare function createDshBridge(options: DshBridgeOptions): DshBridgeHandle;
-/** Fold a whole log into timeline rows. */
-export declare function foldEvents(events: readonly SessionEventLike[]): TimelineEntry[];
+/**
+ * Fold a whole log into timeline rows.
+ * @param events - committed session events, oldest first.
+ * @param parentSession - the Session's `parentSession` header, for a subagent.
+ */
+export declare function foldEvents(events: readonly SessionEventLike[], parentSession?: string): TimelineEntry[];
 /**
  * Fold one durable session event into zero or more timeline rows.
  *
@@ -34,10 +38,14 @@ export declare function foldEvents(events: readonly SessionEventLike[]): Timelin
  * no duplicate running and completed rows. A live running indicator needs the
  * Paseo timeline-replacement surface, which this daemon does not advertise.
  * @param event - committed session event.
- * @param clientMessageId - identity the client minted for this submission, when it made it.
+ * @param context.clientMessageId - identity the client minted for this submission, when it made it.
+ * @param context.parentSession - the Session's `parentSession` header, for a subagent.
  * @returns the rows this event contributes.
  */
-export declare function foldEvent(event: SessionEventLike, clientMessageId?: string): TimelineEntry[];
+export declare function foldEvent(event: SessionEventLike, context?: {
+    readonly clientMessageId?: string | undefined;
+    readonly parentSession?: string | undefined;
+}): TimelineEntry[];
 /** Concatenate the text blocks of one message. */
 export declare function messageText(message: Record<string, unknown>): string | undefined;
 /** Concatenate the reasoning blocks of one assistant message. */

@@ -2,7 +2,7 @@
  * dsh-paseo-server browser half.
  *
  * Two surfaces, one component: the Paseo card on a Plugins row, and a Paseo
- * tab in Settings > Plugins. Both render the pairing QR and the pairing
+ * page in Settings. Both render the pairing QR and the pairing
  * strings, so a phone can be pointed at this daemon without a terminal. The QR
  * is an SVG document served by the host half, so the browser half carries no
  * encoder and no QR dependency.
@@ -232,12 +232,12 @@ window.__ModuleLoader__.load({
         locale: LOCALE_NS,
       }, Card))
 
-      // The Settings > Plugins tab, which is where a plugin's own settings
-      // live and where the QR is reachable without opening a bundle row.
-      ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-        name: 'settings.plugins.tab',
+      // The Settings page, where the QR is reachable without opening a bundle
+      // row. The Plugins page skips it because the row registers its own card.
+      ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section',
         id: 'paseo',
-        order: 20,
+        order: 30,
         label: () => t('tab'),
         locale: LOCALE_NS,
       }, Card))

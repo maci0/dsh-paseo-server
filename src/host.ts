@@ -52,7 +52,7 @@ export interface SessionSummaryLike {
 export interface SessionLike {
   readonly id: string
   readonly seq: number
-  readonly header: { readonly cwd?: string }
+  readonly header: { readonly cwd?: string; readonly parentSession?: string }
   /** Durable events in `[from, to)`, oldest first. */
   snapshotEvents(from?: number, to?: number): readonly SessionEventLike[]
   /** Request header of the latest model call, when one was recorded. */
@@ -239,17 +239,22 @@ export interface SessionControllerLike {
   }): Promise<{ readonly sessionId: string }>
 }
 
+/** Route admission: `required` (the WebServer default) needs a harness Peer, `anonymous` admits without one. */
+export type WebAuthLike = 'anonymous' | 'required' | 'deny'
+
 /** One HTTP route registration. */
 export interface WebRouteLike {
   readonly kind: 'exact' | 'prefix'
   readonly path: string
   readonly handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+  readonly auth?: WebAuthLike
 }
 
 /** One exact-path upgrade route registration. */
 export interface WebUpgradeRouteLike {
   readonly path: string
   readonly handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>
+  readonly auth?: WebAuthLike
 }
 
 /** Shared HTTP listener surface. */

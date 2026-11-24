@@ -303,3 +303,49 @@ test('a session with no directory is an agent under an ungrouped workspace', asy
   assert.ok(owner !== undefined, 'the agent workspace must appear in the workspace list')
   assert.equal(owner.name, 'Ungrouped')
 })
+
+test('a subagent shows its delegated task as title and first prompt, in the current and the older form', async () => {
+  const forms: Array<Record<string, unknown>> = [
+    { source: { kind: 'agent-message', form: 'relay', senderSessionId: 'ses_parent' }, content: [{ type: 'text', text: 'Agent main sent a message: ' }, { type: 'text', text: 'review the diff' }] },
+    { source: { kind: 'user' }, content: [{ type: 'text', text: 'review the diff' }] },
+  ]
+  for (const form of forms) {
+    const events: SessionEventLike[] = [
+      { type: 'user/message', seq: 0, time: 1_760_000_000_000, data: { id: 'm1', role: 'user', ...form } },
+    ]
+    const { services } = coldHost()
+    const summary = {
+      sessionId: 'ses_child', cwd: '/repo', running: false, agentAvailable: true, blank: false,
+      parentSessionId: 'ses_parent', origin: 'subagent', updatedAt: 1_760_000_000_000,
+    }
+    ;(services.sessionController as { list: () => Promise<unknown> }).list = async () => ({ items: [summary] })
+    services.sessions = {
+      get: (id: string) => id !== 'ses_child' ? undefined : {
+        id, seq: events.length, header: { cwd: '/repo', parentSession: 'ses_parent' },
+        snapshotEvents: (from = 0, to = events.length) => events.slice(from, to),
+      },
+      list: () => [],
+    }
+    const bridge = createDshBridge({ ctx: fakeContext(services).ctx, defaultProvider: 'deepseek', defaultModel: 'deepseek-flash' })
+    const kind = String((form.source as { kind: string }).kind)
+    assert.equal((await bridge.getAgent('ses_child'))?.title, 'review the diff', kind)
+    assert.deepEqual((await bridge.getTimeline('ses_child')).map((entry) => entry.item), [{ type: 'user_message', text: 'review the diff', messageId: 'm1' }], kind)
+  }
+})
+
+test('a cold subagent timeline keeps its delegated task', async () => {
+  const { services } = coldHost()
+  const controller = services.sessionController as { list: () => Promise<unknown>; page: () => Promise<unknown> }
+  controller.list = async () => ({
+    items: [{ sessionId: 'ses_child', running: false, agentAvailable: false, blank: false, parentSessionId: 'ses_parent', origin: 'subagent', updatedAt: 1_760_000_000_000 }],
+  })
+  controller.page = async () => ({
+    records: [{ event: { type: 'user/message', seq: 0, time: 1_760_000_000_000, data: {
+      id: 'm1', role: 'user', source: { kind: 'agent-message', form: 'relay', senderSessionId: 'ses_parent' },
+      content: [{ type: 'text', text: 'Agent main sent a message: ' }, { type: 'text', text: 'review the diff' }],
+    } } }],
+    hasMore: false,
+  })
+  const bridge = createDshBridge({ ctx: fakeContext(services).ctx, defaultProvider: 'deepseek', defaultModel: 'deepseek-flash' })
+  assert.deepEqual((await bridge.getTimeline('ses_child')).map((entry) => entry.item), [{ type: 'user_message', text: 'review the diff', messageId: 'm1' }])
+})
