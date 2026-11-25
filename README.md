@@ -15,7 +15,7 @@ phone and the terminal see the same sessions, and nothing is duplicated.
 Requires DeepSeek Harness `>=0.2.2-rc.4 <0.3.0`. Restart DSH and refresh the browser after upgrading.
 
 ```bash
-dsh plugin --profile web add --save-exact @maci0/dsh-paseo-server@0.18.4
+dsh plugin --profile web add --save-exact @maci0/dsh-paseo-server@0.19.0
 ```
 
 Then restart the profile. The plugin mounts on the harness's own listener:
@@ -31,8 +31,10 @@ stays off.
 
 ## Pair a phone
 
-Open the Paseo card on the Plugins page. It shows a QR code, the pairing link,
-and the CLI target. Scan the QR in the Paseo app, or paste the link.
+Open the **Paseo** panel in the sidebar. It shows a QR code, the pairing link,
+the CLI target, and this plugin's configuration. The same pairing card also
+sits on the plugin's row in the Plugins page and on a Paseo page in Settings.
+Scan the QR in the Paseo app, or paste the link.
 
 To check the daemon from a terminal first:
 
@@ -46,7 +48,10 @@ is the path the phone uses.
 
 ## Configuration
 
-Every field is editable from the Plugins page.
+Every field is editable from the Paseo panel in the sidebar, or from the
+plugin's row in the Plugins page. A save writes only the fields you touched,
+into the profile's patch; restart `dsh web` to apply a change to the running
+daemon.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -133,8 +138,9 @@ Every persisted session is an agent too, not only the ones live in the running
 process. A session the harness is not holding shows as idle, its transcript
 still reads, and prompting it resumes the session and runs the turn.
 
-The pairing QR renders on the plugin's Plugins row and on a Paseo page in
-Settings.
+The pairing QR renders in the Paseo sidebar panel, on the plugin's Plugins row,
+and on a Paseo page in Settings. The sidebar panel also carries the
+configuration form.
 
 Workspace labels and project names and icons are stored under the harness home
 and carried in the descriptors a client sidebar groups by.
